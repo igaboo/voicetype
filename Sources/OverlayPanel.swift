@@ -146,7 +146,7 @@ struct WaveLoadingAnimation: View {
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in
                     let waveOffset = Double(index) / Double(barCount) * .pi * 2
-                    let wave = sin(phase + waveOffset)
+                    let wave = sin(phase - waveOffset)
                     let normalized = (wave + 1) / 2
                     let minH: CGFloat = 4
                     let maxH: CGFloat = 22
