@@ -6,7 +6,6 @@ private let logger = OSLog(subsystem: "com.voicetype.app", category: "general")
 
 func log(_ message: String) {
     os_log("%{public}@", log: logger, type: .default, message)
-    // Also write to log file
     let logURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent(".config/voicetype/debug.log")
     let timestamp = ISO8601DateFormatter().string(from: Date())
@@ -31,13 +30,17 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     private var transcriber = Transcriber()
     private var pasteManager = PasteManager()
     private lazy var overlayPanel = OverlayPanel()
-    private var textFormatter: TextFormatter?
     private var settingsWindow: SettingsWindow?
     private var state: AppState = .idle
     private var recordingStart: Date?
     private var isEnabled = true
     private var enableMenuItem: NSMenuItem!
     private var peakAudioLevel: Float = 0
+    
+    // Separate transcription and formatting engines
+    private var audioTranscriber: AudioTranscriber?
+    private var textFormatter: TextFormatter?
+    private var formattingStyle: FormattingStyle = .formatted
     
     // Config
     private var config: [String: Any] = [:]
@@ -48,7 +51,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         setupStatusItem()
         requestPermissions()
         setupHotkey()
-        setupFormatter()
+        setupEngines()
         log("Setup complete — ready")
     }
     
@@ -93,12 +96,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         guard let button = statusItem.button else { return }
         let symbolName: String
         switch state {
-        case .idle:
-            symbolName = "mic"
-        case .recording:
-            symbolName = "mic.fill"
-        case .processing:
-            symbolName = "ellipsis.circle"
+        case .idle: symbolName = "mic"
+        case .recording: symbolName = "mic.fill"
+        case .processing: symbolName = "ellipsis.circle"
         }
         button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "VoiceType")
     }
@@ -127,38 +127,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     func settingsDidChange() {
         log("Settings changed, reloading...")
         loadConfig()
-        
-        // Restart hotkey manager with new config
         hotkeyManager?.stop()
         setupHotkey()
-        setupFormatter()
+        setupEngines()
     }
     
     // MARK: - Permissions
     
     private func requestPermissions() {
-        // Microphone
         AVCaptureDevice.requestAccess(for: .audio) { granted in
             log("Microphone permission: \(granted ? "✅" : "❌")")
             if !granted {
                 DispatchQueue.main.async {
-                    self.showNotification(
-                        title: "VoiceType",
-                        body: "Microphone access required. Open System Settings → Privacy & Security → Microphone."
-                    )
+                    self.showNotification(title: "VoiceType", body: "Microphone access required.")
                 }
             }
         }
-        
-        // Speech recognition
         Transcriber.requestAuthorization { granted in
             log("Speech recognition permission: \(granted ? "✅" : "❌")")
-            if !granted {
-                self.showNotification(
-                    title: "VoiceType",
-                    body: "Speech recognition access required. Open System Settings → Privacy & Security → Speech Recognition."
-                )
-            }
         }
     }
     
@@ -166,13 +152,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     
     private func setupHotkey() {
         let hotkeyType = config["hotkey"] as? String ?? "fn"
-        let mask: UInt64
-        switch hotkeyType {
-        case "option":
-            mask = CGEventFlags.maskAlternate.rawValue
-        default: // "fn"
-            mask = 0x00800000 // NX_SECONDARYFNMASK
-        }
+        let mask: UInt64 = hotkeyType == "option" ? CGEventFlags.maskAlternate.rawValue : 0x00800000
         
         hotkeyManager = HotkeyManager(
             modifierMask: mask,
@@ -180,39 +160,52 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             onKeyUp: { [weak self] in self?.stopAndTranscribe() }
         )
         
-        let hotkeyStarted = hotkeyManager.start()
-        log("Hotkey (\(hotkeyType)) event tap: \(hotkeyStarted ? "✅" : "❌ FAILED — no Accessibility permission?")")
-        if !hotkeyStarted {
-            showNotification(
-                title: "VoiceType — Accessibility Required",
-                body: "Open System Settings → Privacy & Security → Accessibility → add VoiceType"
-            )
+        let started = hotkeyManager.start()
+        log("Hotkey (\(hotkeyType)): \(started ? "✅" : "❌ — no Accessibility?")")
+        if !started {
+            showNotification(title: "VoiceType", body: "Accessibility permission required.")
         }
     }
     
-    // MARK: - Formatter
+    // MARK: - Engine Setup
     
-    private func setupFormatter() {
-        let formatting = config["formatting"] as? [String: Any] ?? [:]
-        let providerName = formatting["provider"] as? String ?? "none"
-        let styleName = formatting["style"] as? String ?? "verbatim"
-        let apiKey = formatting["api_key"] as? String ?? ""
-        let model = formatting["model"] as? String
+    private func setupEngines() {
+        let txConfig = config["transcription"] as? [String: Any] ?? [:]
+        let fmtConfig = config["formatting"] as? [String: Any] ?? [:]
         
-        let provider = APIProvider.allCases.first { $0.rawValue == providerName } ?? .none
-        let style = FormattingStyle.allCases.first { $0.rawValue == styleName } ?? .formatted
+        // Transcription
+        let txProviderName = txConfig["provider"] as? String ?? "none"
+        let txKey = txConfig["api_key"] as? String ?? ""
+        let txModel = txConfig["model"] as? String
+        let txProvider = TranscriptionProvider.allCases.first { $0.rawValue == txProviderName } ?? .none
         
-        if provider != .none && !apiKey.isEmpty {
-            textFormatter = TextFormatter(
-                provider: provider,
-                apiKey: apiKey,
-                model: model?.isEmpty == true ? nil : model,
-                style: style
-            )
-            log("Formatter: \(provider.rawValue) / \(style.rawValue)")
+        if txProvider != .none && !txKey.isEmpty {
+            audioTranscriber = AudioTranscriber(provider: txProvider, apiKey: txKey, model: txModel?.isEmpty == true ? nil : txModel)
+            log("Transcription: \(txProvider.rawValue)")
+        } else {
+            audioTranscriber = nil
+            log("Transcription: Apple Speech")
+        }
+        
+        // Formatting
+        let fmtProviderName = fmtConfig["provider"] as? String ?? "none"
+        let fmtStyleName = fmtConfig["style"] as? String ?? "formatted"
+        let fmtModel = fmtConfig["model"] as? String
+        let fmtProvider = FormattingProvider.allCases.first { $0.rawValue == fmtProviderName } ?? .none
+        formattingStyle = FormattingStyle.allCases.first { $0.rawValue == fmtStyleName } ?? .formatted
+        
+        // Resolve formatting API key: use its own, or fall back to transcription key if same provider
+        var fmtKey = fmtConfig["api_key"] as? String ?? ""
+        if fmtKey.isEmpty && fmtProviderName == txProviderName {
+            fmtKey = txKey
+        }
+        
+        if fmtProvider != .none && !fmtKey.isEmpty {
+            textFormatter = TextFormatter(provider: fmtProvider, apiKey: fmtKey, model: fmtModel?.isEmpty == true ? nil : fmtModel, style: formattingStyle)
+            log("Formatting: \(fmtProvider.rawValue) / \(formattingStyle.rawValue)")
         } else {
             textFormatter = nil
-            log("No provider — using Apple Speech only")
+            log("Formatting: disabled")
         }
     }
     
@@ -226,12 +219,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         }
         state = .recording
         recordingStart = Date()
+        peakAudioLevel = 0
         updateIcon(.recording)
         overlayPanel.showRecording()
-        peakAudioLevel = 0
         NSSound(named: "Blow")?.play()
         
-        // Wire up audio level updates to the overlay
         audioRecorder.onLevelUpdate = { [weak self] level in
             self?.overlayPanel.updateLevel(level)
             if level > (self?.peakAudioLevel ?? 0) {
@@ -253,9 +245,10 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         log("Key up — stopping recording")
         guard state == .recording else { return }
         
-        // Minimum 0.4s to avoid accidental taps
         let duration = Date().timeIntervalSince(recordingStart ?? Date())
-        log("Recording duration: \(String(format: "%.1f", duration))s")
+        log("Duration: \(String(format: "%.1f", duration))s, peak: \(peakAudioLevel)")
+        
+        // Too short = accidental tap
         guard duration >= 0.4 else {
             audioRecorder.cancel()
             state = .idle
@@ -270,76 +263,109 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         NSSound(named: "Pop")?.play()
         
         guard let audioURL = audioRecorder.stop() else {
-            state = .idle
-            updateIcon(.idle)
-            overlayPanel.dismiss()
-            return
-        }
-        
-        // Skip if no meaningful audio was detected (prevents hallucination)
-        log("Peak audio level: \(peakAudioLevel)")
-        if peakAudioLevel < 0.05 {
-            log("Silence detected (peak \(peakAudioLevel) < 0.05) — skipping transcription")
             finishProcessing()
             return
         }
         
-        // If provider handles transcription, skip Apple Speech entirely
-        if let formatter = textFormatter, formatter.handlesTranscription {
-            log("Using \(formatter.provider.rawValue) for transcription")
-            formatter.processAudio(audioURL: audioURL) { [weak self] result in
-                DispatchQueue.main.async {
-                    switch result {
-                    case .success(let text):
-                        log("Result: \"\(text)\"")
-                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !trimmed.isEmpty {
-                            self?.pasteManager.paste(trimmed)
-                        }
-                    case .failure(let error):
-                        log("❌ Transcription failed: \(error)")
-                        self?.showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
+        // Silence check
+        if peakAudioLevel < 0.05 {
+            log("Silence detected — skipping")
+            finishProcessing()
+            return
+        }
+        
+        // Determine flow based on configured engines
+        if let apiTranscriber = audioTranscriber {
+            // Can we do transcription + formatting in one shot? (Gemini as both)
+            let canOneShot = apiTranscriber.provider.canAlsoFormat
+                && textFormatter != nil
+                && apiTranscriber.provider.rawValue == textFormatter?.provider.rawValue
+            
+            if canOneShot {
+                // One-shot: Gemini transcribe + format
+                log("One-shot: \(apiTranscriber.provider.rawValue) transcribe+format")
+                apiTranscriber.transcribe(audioURL: audioURL, style: formattingStyle) { [weak self] result in
+                    DispatchQueue.main.async {
+                        self?.handleResult(result)
                     }
-                    self?.finishProcessing()
+                }
+            } else {
+                // Two-step: API transcribe → optional format
+                log("Two-step: \(apiTranscriber.provider.rawValue) transcribe → \(textFormatter?.provider.rawValue ?? "none") format")
+                apiTranscriber.transcribe(audioURL: audioURL) { [weak self] result in
+                    DispatchQueue.main.async {
+                        switch result {
+                        case .success(let text):
+                            self?.maybeFormat(text)
+                        case .failure(let error):
+                            log("❌ Transcription failed: \(error)")
+                            self?.showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
+                            self?.finishProcessing()
+                        }
+                    }
                 }
             }
         } else {
-            // Apple Speech → optional AI formatting
+            // Apple Speech → optional format
+            log("Apple Speech transcription")
             transcriber.transcribe(audioURL: audioURL) { [weak self] result in
                 DispatchQueue.main.async {
                     switch result {
                     case .success(let text):
-                        log("Transcription: \"\(text)\"")
-                        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            self?.finishProcessing()
-                            return
-                        }
-                        if let formatter = self?.textFormatter {
-                            formatter.format(text) { formatResult in
-                                DispatchQueue.main.async {
-                                    switch formatResult {
-                                    case .success(let formatted):
-                                        log("Formatted: \"\(formatted)\"")
-                                        self?.pasteManager.paste(formatted)
-                                    case .failure(let error):
-                                        log("Format failed, using raw: \(error)")
-                                        self?.pasteManager.paste(text)
-                                    }
-                                    self?.finishProcessing()
-                                }
-                            }
-                        } else {
-                            self?.pasteManager.paste(text)
-                            self?.finishProcessing()
-                        }
+                        self?.maybeFormat(text)
                     case .failure(let error):
-                        log("❌ Transcription failed: \(error)")
+                        log("❌ Apple Speech failed: \(error)")
                         self?.showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
                         self?.finishProcessing()
                     }
                 }
             }
         }
+    }
+    
+    /// Format text if a formatter is configured, otherwise paste raw
+    private func maybeFormat(_ text: String) {
+        log("Transcription: \"\(text)\"")
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            finishProcessing()
+            return
+        }
+        
+        if let formatter = textFormatter {
+            formatter.format(text) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let formatted):
+                        log("Formatted: \"\(formatted)\"")
+                        self?.pasteManager.paste(formatted)
+                    case .failure(let error):
+                        log("Format failed, using raw: \(error)")
+                        self?.pasteManager.paste(text)
+                    }
+                    self?.finishProcessing()
+                }
+            }
+        } else {
+            pasteManager.paste(text)
+            finishProcessing()
+        }
+    }
+    
+    /// Handle a final result (from one-shot transcription+formatting)
+    private func handleResult(_ result: Result<String, Error>) {
+        switch result {
+        case .success(let text):
+            log("Result: \"\(text)\"")
+            let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                pasteManager.paste(trimmed)
+            }
+        case .failure(let error):
+            log("❌ Failed: \(error)")
+            showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
+        }
+        finishProcessing()
     }
     
     private func finishProcessing() {

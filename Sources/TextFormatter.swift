@@ -1,5 +1,7 @@
 import Foundation
 
+// MARK: - Enums
+
 enum FormattingStyle: String, CaseIterable {
     case casual = "casual"
     case formatted = "formatted"
@@ -34,6 +36,7 @@ enum FormattingStyle: String, CaseIterable {
         }
     }
     
+    /// Prompt for formatting already-transcribed text
     var prompt: String {
         switch self {
         case .casual:
@@ -65,7 +68,7 @@ enum FormattingStyle: String, CaseIterable {
         }
     }
     
-    /// Prompt for multimodal audio transcription (Gemini/OpenAI — transcribe + format in one step)
+    /// Prompt for multimodal transcription + formatting in one shot
     var audioPrompt: String {
         let noiseRule = "IGNORE all background noise, sound effects, music, and non-speech sounds. " +
             "Only transcribe human speech. If there is no speech, respond with {\"text\":\"\"}."
@@ -99,15 +102,22 @@ enum FormattingStyle: String, CaseIterable {
             """
         }
     }
+    
+    /// Plain transcription prompt (no formatting, for when formatting is handled separately)
+    static let plainTranscriptionPrompt = """
+        Transcribe this audio exactly as spoken, with proper punctuation and capitalization. \
+        IGNORE all background noise, sound effects, music, and non-speech sounds. \
+        Only transcribe human speech. If there is no speech, respond with {"text":""}. \
+        You MUST respond with ONLY a JSON object: {"text":"transcription here"}
+        """
 }
 
-enum APIProvider: String, CaseIterable {
+enum TranscriptionProvider: String, CaseIterable {
     case none = "none"
     case gemini = "gemini"
     case openai = "openai"
     case deepgram = "deepgram"
     case elevenlabs = "elevenlabs"
-    case anthropic = "anthropic"
     
     var label: String {
         switch self {
@@ -116,7 +126,6 @@ enum APIProvider: String, CaseIterable {
         case .openai: return "OpenAI"
         case .deepgram: return "Deepgram"
         case .elevenlabs: return "ElevenLabs"
-        case .anthropic: return "Anthropic"
         }
     }
     
@@ -127,120 +136,85 @@ enum APIProvider: String, CaseIterable {
         case .openai: return "gpt-4o-transcribe"
         case .deepgram: return "nova-3"
         case .elevenlabs: return "scribe_v1"
-        case .anthropic: return "claude-haiku-4-5-20251001"
         }
     }
     
-    var defaultEndpoint: String {
+    /// Whether this provider can also handle formatting (it's an LLM)
+    var canAlsoFormat: Bool {
         switch self {
-        case .none: return ""
-        case .gemini: return "https://generativelanguage.googleapis.com/v1beta"
-        case .openai: return "https://api.openai.com/v1"
-        case .deepgram: return "https://api.deepgram.com/v1"
-        case .elevenlabs: return "https://api.elevenlabs.io/v1"
-        case .anthropic: return "https://api.anthropic.com/v1/messages"
-        }
-    }
-    
-    /// Whether this provider handles transcription (skips Apple Speech)
-    var handlesTranscription: Bool {
-        switch self {
-        case .none, .anthropic: return false
-        default: return true
-        }
-    }
-    
-    /// Whether this provider can also format text (it's an LLM)
-    var canFormat: Bool {
-        switch self {
-        case .gemini, .openai, .anthropic: return true
+        case .gemini: return true
         default: return false
         }
     }
 }
 
-// MARK: - TextFormatter
+enum FormattingProvider: String, CaseIterable {
+    case none = "none"
+    case gemini = "gemini"
+    case openai = "openai"
+    case anthropic = "anthropic"
+    
+    var label: String {
+        switch self {
+        case .none: return "None"
+        case .gemini: return "Google Gemini"
+        case .openai: return "OpenAI"
+        case .anthropic: return "Anthropic"
+        }
+    }
+    
+    var defaultModel: String {
+        switch self {
+        case .none: return ""
+        case .gemini: return "gemini-2.5-flash"
+        case .openai: return "gpt-4o-mini"
+        case .anthropic: return "claude-haiku-4-5-20251001"
+        }
+    }
+}
 
-class TextFormatter {
-    let provider: APIProvider
+// MARK: - Transcriber (API-based)
+
+class AudioTranscriber {
+    let provider: TranscriptionProvider
     private let apiKey: String
     private let model: String
-    private let endpoint: String
-    private let style: FormattingStyle
     
-    init(provider: APIProvider, apiKey: String, model: String? = nil, endpoint: String? = nil, style: FormattingStyle) {
+    init(provider: TranscriptionProvider, apiKey: String, model: String? = nil) {
         self.provider = provider
         self.apiKey = apiKey
         self.model = model ?? provider.defaultModel
-        self.endpoint = endpoint ?? provider.defaultEndpoint
-        self.style = style
     }
     
-    var handlesTranscription: Bool {
-        return provider.handlesTranscription && !apiKey.isEmpty
-    }
-    
-    /// Main entry point: process audio file → formatted text
-    /// Handles transcription + formatting based on provider capabilities
-    func processAudio(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        log("processAudio() — provider=\(provider.rawValue) style=\(style.rawValue)")
-        
-        switch provider {
-        case .gemini:
-            callGeminiAudio(audioURL: audioURL, completion: completion)
-        case .openai:
-            callOpenAITranscribe(audioURL: audioURL) { [weak self] result in
-                guard let self = self else { return }
-                switch result {
-                case .success(let text):
-                    // OpenAI transcription done — now format with chat API
-                    self.callOpenAIFormat(text: text, completion: completion)
-                case .failure(let error):
-                    completion(.failure(error))
-                }
-            }
-        case .deepgram:
-            callDeepgram(audioURL: audioURL, completion: completion)
-        case .elevenlabs:
-            callElevenLabs(audioURL: audioURL, completion: completion)
-        default:
-            completion(.failure(FormatterError.unsupportedProvider))
-        }
-    }
-    
-    /// Format already-transcribed text (Anthropic, or Apple Speech → format flow)
-    func format(_ text: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard !apiKey.isEmpty else {
-            completion(.success(text))
-            return
-        }
-        
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count >= 3 else {
-            completion(.success(text))
-            return
-        }
-        
-        switch provider {
-        case .openai:
-            callOpenAIFormat(text: text, completion: completion)
-        case .anthropic:
-            callAnthropic(text: text, completion: completion)
-        default:
-            completion(.success(text))
-        }
-    }
-    
-    // MARK: - Gemini (audio → formatted text, one-shot)
-    
-    private func callGeminiAudio(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
+    /// Transcribe audio, optionally doing formatting in one shot (Gemini only)
+    func transcribe(audioURL: URL, style: FormattingStyle? = nil, completion: @escaping (Result<String, Error>) -> Void) {
         guard let audioData = try? Data(contentsOf: audioURL) else {
             completion(.failure(FormatterError.audioReadFailed))
             return
         }
         
+        log("Transcribing with \(provider.rawValue), model=\(model), audio=\(audioData.count) bytes")
+        
+        switch provider {
+        case .none:
+            completion(.failure(FormatterError.unsupportedProvider))
+        case .gemini:
+            callGemini(audioData: audioData, style: style, completion: completion)
+        case .openai:
+            callOpenAITranscribe(audioData: audioData, completion: completion)
+        case .deepgram:
+            callDeepgram(audioData: audioData, completion: completion)
+        case .elevenlabs:
+            callElevenLabs(audioData: audioData, completion: completion)
+        }
+    }
+    
+    // MARK: Gemini
+    
+    private func callGemini(audioData: Data, style: FormattingStyle?, completion: @escaping (Result<String, Error>) -> Void) {
         let base64Audio = audioData.base64EncodedString()
-        let urlString = "\(endpoint)/models/\(model):generateContent?key=\(apiKey)"
+        let prompt = style?.audioPrompt ?? FormattingStyle.plainTranscriptionPrompt
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
         
         guard let url = URL(string: urlString) else {
             completion(.failure(FormatterError.invalidEndpoint))
@@ -256,30 +230,15 @@ class TextFormatter {
             "contents": [[
                 "parts": [
                     ["inline_data": ["mime_type": "audio/wav", "data": base64Audio]],
-                    ["text": style.audioPrompt]
+                    ["text": prompt]
                 ]
             ]],
             "generationConfig": ["temperature": 0.0, "maxOutputTokens": 2048]
         ]
         
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-        log("Gemini: \(model), audio=\(audioData.count) bytes")
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("Gemini error: \(error)")
-                completion(.failure(error))
-                return
-            }
-            if let http = response as? HTTPURLResponse { log("Gemini status: \(http.statusCode)") }
-            guard let data = data else {
-                completion(.failure(FormatterError.noResponse))
-                return
-            }
-            
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            log("Gemini response: \(raw.prefix(300))")
-            
+        makeRequest(request, label: "Gemini") { data in
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let candidates = json["candidates"] as? [[String: Any]],
                   let content = candidates.first?["content"] as? [String: Any],
@@ -288,26 +247,18 @@ class TextFormatter {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let err = json["error"] as? [String: Any],
                    let msg = err["message"] as? String {
-                    completion(.failure(FormatterError.apiError(msg)))
-                } else {
-                    completion(.failure(FormatterError.parseFailed))
+                    return .failure(FormatterError.apiError(msg))
                 }
-                return
+                return .failure(FormatterError.parseFailed)
             }
-            
-            completion(.success(Self.extractJSON(from: text)))
-        }.resume()
+            return .success(extractJSON(from: text))
+        } completion: { completion($0) }
     }
     
-    // MARK: - OpenAI Transcribe (audio → text)
+    // MARK: OpenAI
     
-    private func callOpenAITranscribe(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let audioData = try? Data(contentsOf: audioURL) else {
-            completion(.failure(FormatterError.audioReadFailed))
-            return
-        }
-        
-        guard let url = URL(string: "\(endpoint)/audio/transcriptions") else {
+    private func callOpenAITranscribe(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let url = URL(string: "https://api.openai.com/v1/audio/transcriptions") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
         }
@@ -318,55 +269,215 @@ class TextFormatter {
         request.timeoutInterval = 15
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = multipartBody(boundary: boundary, audioData: audioData, fields: ["model": model])
         
+        makeRequest(request, label: "OpenAI") { data in
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let text = json["text"] as? String {
+                return .success(text)
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let err = json["error"] as? [String: Any],
+               let msg = err["message"] as? String {
+                return .failure(FormatterError.apiError(msg))
+            }
+            return .failure(FormatterError.parseFailed)
+        } completion: { completion($0) }
+    }
+    
+    // MARK: Deepgram
+    
+    private func callDeepgram(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let url = URL(string: "https://api.deepgram.com/v1/listen?model=\(model)&smart_format=true&punctuate=true") else {
+            completion(.failure(FormatterError.invalidEndpoint))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        request.httpBody = audioData
+        
+        makeRequest(request, label: "Deepgram") { data in
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let results = json["results"] as? [String: Any],
+               let channels = results["channels"] as? [[String: Any]],
+               let alts = channels.first?["alternatives"] as? [[String: Any]],
+               let transcript = alts.first?["transcript"] as? String {
+                return .success(transcript)
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let msg = json["err_msg"] as? String {
+                return .failure(FormatterError.apiError(msg))
+            }
+            return .failure(FormatterError.parseFailed)
+        } completion: { completion($0) }
+    }
+    
+    // MARK: ElevenLabs
+    
+    private func callElevenLabs(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let url = URL(string: "https://api.elevenlabs.io/v1/speech-to-text") else {
+            completion(.failure(FormatterError.invalidEndpoint))
+            return
+        }
+        
+        let boundary = UUID().uuidString
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.httpBody = multipartBody(boundary: boundary, audioData: audioData, fields: ["model_id": model])
+        
+        makeRequest(request, label: "ElevenLabs") { data in
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let text = json["text"] as? String {
+                return .success(text)
+            }
+            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let detail = json["detail"] as? [String: Any],
+               let msg = detail["message"] as? String {
+                return .failure(FormatterError.apiError(msg))
+            }
+            return .failure(FormatterError.parseFailed)
+        } completion: { completion($0) }
+    }
+    
+    // MARK: Helpers
+    
+    private func makeRequest(_ request: URLRequest, label: String,
+                             parse: @escaping (Data) -> Result<String, Error>,
+                             completion: @escaping (Result<String, Error>) -> Void) {
+        URLSession.shared.dataTask(with: request) { data, response, error in
+            if let error = error {
+                log("\(label) error: \(error)")
+                completion(.failure(error))
+                return
+            }
+            if let http = response as? HTTPURLResponse {
+                log("\(label) status: \(http.statusCode)")
+            }
+            guard let data = data else {
+                completion(.failure(FormatterError.noResponse))
+                return
+            }
+            log("\(label) response: \(String(data: data, encoding: .utf8)?.prefix(300) ?? "unreadable")")
+            completion(parse(data))
+        }.resume()
+    }
+    
+    private func multipartBody(boundary: String, audioData: Data, fields: [String: String]) -> Data {
         var body = Data()
-        // file field
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n")
         body.append("Content-Type: audio/wav\r\n\r\n")
         body.append(audioData)
         body.append("\r\n")
-        // model field
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"model\"\r\n\r\n")
-        body.append("\(model)\r\n")
+        for (key, value) in fields {
+            body.append("--\(boundary)\r\n")
+            body.append("Content-Disposition: form-data; name=\"\(key)\"\r\n\r\n")
+            body.append("\(value)\r\n")
+        }
         body.append("--\(boundary)--\r\n")
+        return body
+    }
+    
+    private func extractJSON(from text: String) -> String {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.hasPrefix("```json") { s = String(s.dropFirst(7)) }
+        else if s.hasPrefix("```") { s = String(s.dropFirst(3)) }
+        if s.hasSuffix("```") { s = String(s.dropLast(3)) }
+        s = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let data = s.data(using: .utf8),
+           let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+           let text = parsed["text"] {
+            return text
+        }
+        return s
+    }
+}
+
+// MARK: - Text Formatter (LLM-based formatting)
+
+class TextFormatter {
+    let provider: FormattingProvider
+    private let apiKey: String
+    private let model: String
+    private let style: FormattingStyle
+    
+    init(provider: FormattingProvider, apiKey: String, model: String? = nil, style: FormattingStyle) {
+        self.provider = provider
+        self.apiKey = apiKey
+        self.model = model ?? provider.defaultModel
+        self.style = style
+    }
+    
+    func format(_ text: String, completion: @escaping (Result<String, Error>) -> Void) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count >= 3, !apiKey.isEmpty else {
+            completion(.success(text))
+            return
+        }
         
-        request.httpBody = body
-        log("OpenAI transcribe: \(model), audio=\(audioData.count) bytes")
+        log("Formatting with \(provider.rawValue), model=\(model), style=\(style.rawValue)")
+        
+        switch provider {
+        case .none:
+            completion(.success(text))
+        case .gemini:
+            callGemini(text: text, completion: completion)
+        case .openai:
+            callOpenAI(text: text, completion: completion)
+        case .anthropic:
+            callAnthropic(text: text, completion: completion)
+        }
+    }
+    
+    // MARK: Gemini (text → formatted text)
+    
+    private func callGemini(text: String, completion: @escaping (Result<String, Error>) -> Void) {
+        let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
+        guard let url = URL(string: urlString) else {
+            completion(.failure(FormatterError.invalidEndpoint))
+            return
+        }
+        
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        
+        let body: [String: Any] = [
+            "contents": [[
+                "parts": [["text": "\(style.prompt)\n\n<input>\(text)</input>"]]
+            ]],
+            "generationConfig": ["temperature": 0.0, "maxOutputTokens": 2048]
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("OpenAI transcribe error: \(error)")
-                completion(.failure(error))
-                return
-            }
-            if let http = response as? HTTPURLResponse { log("OpenAI transcribe status: \(http.statusCode)") }
-            guard let data = data else {
-                completion(.failure(FormatterError.noResponse))
-                return
-            }
-            
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            log("OpenAI transcribe response: \(raw.prefix(300))")
-            
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let text = json["text"] as? String {
+            if let error = error { completion(.failure(error)); return }
+            guard let data = data,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let candidates = json["candidates"] as? [[String: Any]],
+                  let content = candidates.first?["content"] as? [String: Any],
+                  let parts = content["parts"] as? [[String: Any]],
+                  let responseText = parts.first?["text"] as? String else {
                 completion(.success(text))
-            } else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let err = json["error"] as? [String: Any],
-                      let msg = err["message"] as? String {
-                completion(.failure(FormatterError.apiError(msg)))
-            } else {
-                completion(.failure(FormatterError.parseFailed))
+                return
             }
+            completion(.success(Self.extractJSON(from: responseText)))
         }.resume()
     }
     
-    // MARK: - OpenAI Format (text → formatted text via chat)
+    // MARK: OpenAI
     
-    private func callOpenAIFormat(text: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let url = URL(string: "\(endpoint)/chat/completions") else {
+    private func callOpenAI(text: String, completion: @escaping (Result<String, Error>) -> Void) {
+        guard let url = URL(string: "https://api.openai.com/v1/chat/completions") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
         }
@@ -378,7 +489,7 @@ class TextFormatter {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = [
-            "model": "gpt-4o-mini",
+            "model": model,
             "messages": [
                 ["role": "system", "content": style.prompt],
                 ["role": "user", "content": "<input>\(text)</input>"]
@@ -390,12 +501,7 @@ class TextFormatter {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("OpenAI format error: \(error)")
-                // Fall back to raw transcription
-                completion(.success(text))
-                return
-            }
+            if let error = error { completion(.failure(error)); return }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
@@ -408,127 +514,10 @@ class TextFormatter {
         }.resume()
     }
     
-    // MARK: - Deepgram (audio → text)
-    
-    private func callDeepgram(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let audioData = try? Data(contentsOf: audioURL) else {
-            completion(.failure(FormatterError.audioReadFailed))
-            return
-        }
-        
-        let params = "model=\(model)&smart_format=true&punctuate=true"
-        guard let url = URL(string: "\(endpoint)/listen?\(params)") else {
-            completion(.failure(FormatterError.invalidEndpoint))
-            return
-        }
-        
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
-        request.httpBody = audioData
-        
-        log("Deepgram: \(model), audio=\(audioData.count) bytes")
-        
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("Deepgram error: \(error)")
-                completion(.failure(error))
-                return
-            }
-            if let http = response as? HTTPURLResponse { log("Deepgram status: \(http.statusCode)") }
-            guard let data = data else {
-                completion(.failure(FormatterError.noResponse))
-                return
-            }
-            
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            log("Deepgram response: \(raw.prefix(300))")
-            
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let results = json["results"] as? [String: Any],
-               let channels = results["channels"] as? [[String: Any]],
-               let alternatives = channels.first?["alternatives"] as? [[String: Any]],
-               let transcript = alternatives.first?["transcript"] as? String {
-                completion(.success(transcript))
-            } else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let msg = json["err_msg"] as? String {
-                completion(.failure(FormatterError.apiError(msg)))
-            } else {
-                completion(.failure(FormatterError.parseFailed))
-            }
-        }.resume()
-    }
-    
-    // MARK: - ElevenLabs (audio → text)
-    
-    private func callElevenLabs(audioURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let audioData = try? Data(contentsOf: audioURL) else {
-            completion(.failure(FormatterError.audioReadFailed))
-            return
-        }
-        
-        guard let url = URL(string: "\(endpoint)/speech-to-text") else {
-            completion(.failure(FormatterError.invalidEndpoint))
-            return
-        }
-        
-        let boundary = UUID().uuidString
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 15
-        request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        
-        var body = Data()
-        // file field
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"recording.wav\"\r\n")
-        body.append("Content-Type: audio/wav\r\n\r\n")
-        body.append(audioData)
-        body.append("\r\n")
-        // model_id field
-        body.append("--\(boundary)\r\n")
-        body.append("Content-Disposition: form-data; name=\"model_id\"\r\n\r\n")
-        body.append("\(model)\r\n")
-        body.append("--\(boundary)--\r\n")
-        
-        request.httpBody = body
-        log("ElevenLabs: \(model), audio=\(audioData.count) bytes")
-        
-        URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("ElevenLabs error: \(error)")
-                completion(.failure(error))
-                return
-            }
-            if let http = response as? HTTPURLResponse { log("ElevenLabs status: \(http.statusCode)") }
-            guard let data = data else {
-                completion(.failure(FormatterError.noResponse))
-                return
-            }
-            
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            log("ElevenLabs response: \(raw.prefix(300))")
-            
-            if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let text = json["text"] as? String {
-                completion(.success(text))
-            } else if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let detail = json["detail"] as? [String: Any],
-                      let msg = detail["message"] as? String {
-                completion(.failure(FormatterError.apiError(msg)))
-            } else {
-                completion(.failure(FormatterError.parseFailed))
-            }
-        }.resume()
-    }
-    
-    // MARK: - Anthropic (text → formatted text)
+    // MARK: Anthropic
     
     private func callAnthropic(text: String, completion: @escaping (Result<String, Error>) -> Void) {
-        guard let url = URL(string: endpoint) else {
+        guard let url = URL(string: "https://api.anthropic.com/v1/messages") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
         }
@@ -555,11 +544,7 @@ class TextFormatter {
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
         
         URLSession.shared.dataTask(with: request) { data, response, error in
-            if let error = error {
-                log("Anthropic error: \(error)")
-                completion(.failure(error))
-                return
-            }
+            if let error = error { completion(.failure(error)); return }
             guard let data = data,
                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let content = json["content"] as? [[String: Any]],
@@ -578,48 +563,35 @@ class TextFormatter {
         }.resume()
     }
     
-    // MARK: - Helpers
+    // MARK: Helpers
     
-    /// Extract text from JSON response, handling code fences and plain text fallback
-    static func extractJSON(from responseText: String) -> String {
-        var s = responseText.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Strip markdown code fences
+    static func extractJSON(from text: String) -> String {
+        var s = text.trimmingCharacters(in: .whitespacesAndNewlines)
         if s.hasPrefix("```json") { s = String(s.dropFirst(7)) }
         else if s.hasPrefix("```") { s = String(s.dropFirst(3)) }
         if s.hasSuffix("```") { s = String(s.dropLast(3)) }
         s = s.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Try JSON parse
         if let data = s.data(using: .utf8),
            let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-           let text = parsed["text"], !text.isEmpty {
+           let text = parsed["text"] {
             return text
         }
-        
-        // Fallback: raw text
         return s
     }
 }
 
-// MARK: - Data extension for multipart
+// MARK: - Data extension
 
 extension Data {
     mutating func append(_ string: String) {
-        if let data = string.data(using: .utf8) {
-            append(data)
-        }
+        if let data = string.data(using: .utf8) { append(data) }
     }
 }
 
 // MARK: - Errors
 
 enum FormatterError: LocalizedError {
-    case invalidEndpoint
-    case unsupportedProvider
-    case audioReadFailed
-    case noResponse
-    case parseFailed
+    case invalidEndpoint, unsupportedProvider, audioReadFailed, noResponse, parseFailed
     case apiError(String)
     
     var errorDescription: String? {
