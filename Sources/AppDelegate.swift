@@ -94,13 +94,36 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     
     private func updateIcon(_ state: AppState) {
         guard let button = statusItem.button else { return }
-        let symbolName: String
         switch state {
-        case .idle: symbolName = "mic"
-        case .recording: symbolName = "mic.fill"
-        case .processing: symbolName = "ellipsis.circle"
+        case .idle:
+            if let customIcon = loadMenuIcon() {
+                button.image = customIcon
+            } else {
+                button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "VoiceType")
+            }
+        case .recording:
+            button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "VoiceType")
+        case .processing:
+            button.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "VoiceType")
         }
-        button.image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "VoiceType")
+    }
+    
+    private func loadMenuIcon() -> NSImage? {
+        let bundle = Bundle.main
+        // Try @2x first for retina
+        if let url = bundle.url(forResource: "MenuIconTemplate@2x", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.isTemplate = true
+            img.size = NSSize(width: 18, height: 18) // point size, @2x handles retina
+            return img
+        }
+        if let url = bundle.url(forResource: "MenuIconTemplate", withExtension: "png"),
+           let img = NSImage(contentsOf: url) {
+            img.isTemplate = true
+            img.size = NSSize(width: 18, height: 18)
+            return img
+        }
+        return nil
     }
     
     @objc private func toggleEnabled(_ sender: NSMenuItem) {
