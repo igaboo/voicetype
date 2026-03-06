@@ -267,9 +267,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             return
         }
         
-        // Silence check
-        if peakAudioLevel < 0.05 {
-            log("Silence detected — skipping")
+        // Silence check — levels are RMS * 5, so 0.15 ≈ actual quiet speech threshold
+        if peakAudioLevel < 0.15 {
+            log("Silence detected (peak \(peakAudioLevel)) — skipping")
             finishProcessing()
             return
         }
@@ -330,6 +330,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             return
         }
         
+        // Discard prompt regurgitation
+        let lower = trimmed.lowercased()
+        if lower.contains("transcribe this audio") || lower.contains("respond with only a json") || lower.contains("dictation commands") {
+            log("⚠️ Discarded — model regurgitated prompt")
+            finishProcessing()
+            return
+        }
+        
         if let formatter = textFormatter {
             formatter.format(text) { [weak self] result in
                 DispatchQueue.main.async {
@@ -356,6 +364,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         case .success(let text):
             log("Result: \"\(text)\"")
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // Sanity check: if result contains prompt fragments, discard it
+            let lower = trimmed.lowercased()
+            if lower.contains("transcribe this audio") || lower.contains("respond with only a json") || lower.contains("dictation commands") {
+                log("⚠️ Discarded — model regurgitated prompt")
+                finishProcessing()
+                return
+            }
             if !trimmed.isEmpty {
                 pasteManager.paste(trimmed)
             }
