@@ -138,29 +138,71 @@ struct WaveformBars: View {
     var isProcessing: Bool
     let barCount = 7
     
-    // Smoothly decays to 0 when processing starts
-    @State private var displayLevel: CGFloat = 0
-    // Fades wave in
+    var body: some View {
+        if isProcessing {
+            WaveAnimationBars(lastLevel: level, barCount: barCount)
+        } else {
+            AudioReactiveBars(level: level, barCount: barCount)
+        }
+    }
+}
+
+// MARK: - Recording: lightweight, no TimelineView
+struct AudioReactiveBars: View {
+    var level: CGFloat
+    let barCount: Int
+    
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<barCount, id: \.self) { index in
+                let center = CGFloat(barCount - 1) / 2.0
+                let distFromCenter = abs(CGFloat(index) - center) / center
+                let positionScale = 1.0 - (distFromCenter * 0.5)
+                
+                let boosted = pow(level, 0.5)
+                let targetHeight = 3.0 + 21.0 * boosted * positionScale
+                let seed = sin(Double(index) * 2.5 + Double(level) * 8.0)
+                let variation = CGFloat(seed) * 3.5 * boosted
+                let barHeight = max(3.0, min(24.0, targetHeight + variation))
+                
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.white.opacity(0.9))
+                    .frame(width: 4, height: barHeight)
+                    .animation(.easeOut(duration: 0.08), value: level)
+            }
+        }
+    }
+}
+
+// MARK: - Processing: TimelineView for wave animation
+struct WaveAnimationBars: View {
+    let lastLevel: CGFloat
+    let barCount: Int
+    
+    @State private var displayLevel: CGFloat = 1
     @State private var waveStrength: CGFloat = 0
     
     var body: some View {
-        TimelineView(.animation(paused: !isProcessing)) { timeline in
-            let phase = isProcessing ? timeline.date.timeIntervalSinceReferenceDate : 0
+        TimelineView(.animation) { timeline in
+            let phase = timeline.date.timeIntervalSinceReferenceDate
             let t = phase.truncatingRemainder(dividingBy: 1.0) / 1.0
             let waveCenter = t * Double(barCount - 1)
             
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in
-                    let audioH = audioBarHeight(index: index, level: displayLevel)
+                    // Audio-reactive base (decaying via displayLevel)
+                    let center = CGFloat(barCount - 1) / 2.0
+                    let distFromCenter = abs(CGFloat(index) - center) / center
+                    let positionScale = 1.0 - (distFromCenter * 0.5)
+                    let boosted = pow(lastLevel * displayLevel, 0.5)
+                    let audioH = max(3.0, min(24.0, 3.0 + 21.0 * boosted * positionScale))
                     
-                    // Wave: broader gaussian for a smooth rolling feel
+                    // Wave overlay
                     let distance = abs(Double(index) - waveCenter)
                     let wave = exp(-distance * distance / 1.5)
                     let waveH = 18.0 * CGFloat(wave) * waveStrength
                     
-                    let minH: CGFloat = 3
-                    let maxH: CGFloat = 24
-                    let barHeight = min(maxH, max(minH, audioH + waveH))
+                    let barHeight = min(24.0, max(3.0, audioH + waveH))
                     
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.white.opacity(0.9))
@@ -168,41 +210,15 @@ struct WaveformBars: View {
                 }
             }
         }
-        .onChange(of: level) { newLevel in
-            if !isProcessing {
-                // During recording: track audio level instantly
-                displayLevel = newLevel
+        .onAppear {
+            displayLevel = 1
+            waveStrength = 0
+            withAnimation(.easeOut(duration: 0.35)) {
+                displayLevel = 0
+            }
+            withAnimation(.easeIn(duration: 0.35).delay(0.15)) {
+                waveStrength = 1
             }
         }
-        .onChange(of: isProcessing) { processing in
-            if processing {
-                // Smoothly decay audio bars to rest, then bring in wave
-                withAnimation(.easeOut(duration: 0.35)) {
-                    displayLevel = 0
-                }
-                withAnimation(.easeIn(duration: 0.35).delay(0.15)) {
-                    waveStrength = 1
-                }
-            } else {
-                waveStrength = 0
-            }
-        }
-    }
-    
-    private func audioBarHeight(index: Int, level: CGFloat) -> CGFloat {
-        let center = CGFloat(barCount - 1) / 2.0
-        let distFromCenter = abs(CGFloat(index) - center) / center
-        let positionScale = 1.0 - (distFromCenter * 0.5)
-        
-        let minHeight: CGFloat = 3
-        let maxHeight: CGFloat = 24
-        
-        let boosted = pow(level, 0.5)
-        let targetHeight = minHeight + (maxHeight - minHeight) * boosted * positionScale
-        
-        let seed = sin(Double(index) * 2.5 + Double(level) * 8.0)
-        let variation = CGFloat(seed) * 3.5 * boosted
-        
-        return max(minHeight, min(maxHeight, targetHeight + variation))
     }
 }
