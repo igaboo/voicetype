@@ -75,7 +75,7 @@ class OverlayPanel: NSPanel {
 
 // MARK: - State
 
-enum OverlayMode {
+enum OverlayMode: Equatable {
     case idle, recording, processing
 }
 
@@ -106,19 +106,19 @@ struct OverlayView: View {
     
     @ViewBuilder
     private var pillContent: some View {
-        HStack(spacing: 6) {
-            switch state.mode {
-            case .idle:
-                EmptyView()
-            case .recording:
-                WaveformBars(level: CGFloat(state.audioLevel))
-            case .processing:
-                WaveformBars(level: 0.05)
-                ProgressView()
-                    .scaleEffect(0.5)
-                    .frame(width: 14, height: 14)
-            }
+        // Fixed-size container so the pill never changes size
+        ZStack {
+            // Waveform bars — visible when recording, hidden when processing
+            WaveformBars(level: state.mode == .recording ? CGFloat(state.audioLevel) : 0)
+                .opacity(state.mode == .recording ? 1 : 0)
+            
+            // Spinner — fades in when processing
+            ProgressView()
+                .scaleEffect(0.6)
+                .opacity(state.mode == .processing ? 1 : 0)
         }
+        .frame(width: 40, height: 24)
+        .animation(.easeInOut(duration: 0.25), value: state.mode)
     }
 }
 
