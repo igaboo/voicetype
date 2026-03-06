@@ -80,19 +80,13 @@ struct SettingsView: View {
                     .pickerStyle(.menu)
                     
                     if hasTxProvider {
-                        LabeledContent("API Key") {
-                            TextField("", text: $txApiKey)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
+                        SecureField("API Key", text: $txApiKey, prompt: Text("Required"))
+                            .textFieldStyle(.roundedBorder)
+                            .fixedSize(horizontal: false, vertical: true)
                         
-                        LabeledContent("Model") {
-                            TextField(selectedTxProvider.defaultModel, text: $txModel)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
+                        TextField("Model", text: $txModel, prompt: Text(selectedTxProvider.defaultModel))
+                            .textFieldStyle(.roundedBorder)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 } header: {
                     Text("Transcription")
@@ -114,25 +108,17 @@ struct SettingsView: View {
                     
                     if hasFmtProvider {
                         if fmtSharesKey {
-                            LabeledContent("API Key") {
-                                Text("Using key from transcription")
-                                    .font(.caption).foregroundColor(.secondary)
-                            }
+                            Text("Using API key from transcription.")
+                                .font(.caption).foregroundColor(.secondary)
                         } else {
-                            LabeledContent("API Key") {
-                                TextField("", text: $fmtApiKey)
-                                    .textFieldStyle(.roundedBorder)
-                                    .lineLimit(1)
-                                    .truncationMode(.tail)
-                            }
+                            SecureField("API Key", text: $fmtApiKey, prompt: Text("Required"))
+                                .textFieldStyle(.roundedBorder)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         
-                        LabeledContent("Model") {
-                            TextField(selectedFmtProvider.defaultModel, text: $fmtModel)
-                                .textFieldStyle(.roundedBorder)
-                                .lineLimit(1)
-                                .truncationMode(.tail)
-                        }
+                        TextField("Model", text: $fmtModel, prompt: Text(selectedFmtProvider.defaultModel))
+                            .textFieldStyle(.roundedBorder)
+                            .fixedSize(horizontal: false, vertical: true)
                         
                         Picker("Style", selection: $fmtStyle) {
                             ForEach(FormattingStyle.allCases, id: \.rawValue) { s in
