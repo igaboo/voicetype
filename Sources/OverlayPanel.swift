@@ -160,10 +160,10 @@ struct AudioReactiveBars: View {
                 let positionScale = 1.0 - (distFromCenter * 0.5)
                 
                 let boosted = pow(level, 0.5)
-                let targetHeight = 3.0 + 21.0 * boosted * positionScale
+                let targetHeight = 6.0 + 18.0 * boosted * positionScale
                 let seed = sin(Double(index) * 2.5 + Double(level) * 8.0)
                 let variation = CGFloat(seed) * 3.5 * boosted
-                let barHeight = max(3.0, min(24.0, targetHeight + variation))
+                let barHeight = max(6.0, min(24.0, targetHeight + variation))
                 
                 RoundedRectangle(cornerRadius: 2)
                     .fill(Color.white.opacity(0.9))
@@ -186,7 +186,8 @@ struct WaveAnimationBars: View {
         TimelineView(.animation) { timeline in
             let phase = timeline.date.timeIntervalSinceReferenceDate
             let t = phase.truncatingRemainder(dividingBy: 1.0) / 1.0
-            let waveCenter = t * Double(barCount - 1)
+            // Sweep from -2 to barCount+1 so the wave enters from off-left and exits off-right
+            let waveCenter = -2.0 + t * (Double(barCount) + 3.0)
             
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in
@@ -195,14 +196,14 @@ struct WaveAnimationBars: View {
                     let distFromCenter = abs(CGFloat(index) - center) / center
                     let positionScale = 1.0 - (distFromCenter * 0.5)
                     let boosted = pow(lastLevel * displayLevel, 0.5)
-                    let audioH = max(3.0, min(24.0, 3.0 + 21.0 * boosted * positionScale))
+                    let audioH = max(6.0, min(24.0, 6.0 + 18.0 * boosted * positionScale))
                     
                     // Wave overlay
                     let distance = abs(Double(index) - waveCenter)
                     let wave = exp(-distance * distance / 1.5)
                     let waveH = 18.0 * CGFloat(wave) * waveStrength
                     
-                    let barHeight = min(24.0, max(3.0, audioH + waveH))
+                    let barHeight = min(24.0, max(6.0, audioH + waveH))
                     
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.white.opacity(0.9))
