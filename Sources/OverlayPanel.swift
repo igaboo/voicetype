@@ -58,8 +58,6 @@ class OverlayPanel: NSPanel {
     
     func showProcessing() {
         overlayState.mode = .processing
-        // Don't zero audioLevel — let bars hold their last position
-        // so the transition into the pulse animation is seamless
     }
     
     func showError(_ message: String) {
@@ -140,42 +138,58 @@ struct WaveformBars: View {
     var isProcessing: Bool
     let barCount = 7
     
-    @State private var pulseStrength: CGFloat = 0
+    // Smoothly decays to 0 when processing starts
+    @State private var displayLevel: CGFloat = 0
+    // Fades wave in
+    @State private var waveStrength: CGFloat = 0
     
     var body: some View {
         TimelineView(.animation(paused: !isProcessing)) { timeline in
             let phase = isProcessing ? timeline.date.timeIntervalSinceReferenceDate : 0
-            let t = phase.truncatingRemainder(dividingBy: 0.8) / 0.8
-            let pulseCenter = t * Double(barCount - 1)
+            let t = phase.truncatingRemainder(dividingBy: 1.0) / 1.0
+            let waveCenter = t * Double(barCount - 1)
             
             HStack(spacing: 3) {
                 ForEach(0..<barCount, id: \.self) { index in
-                    let audioH = audioBarHeight(index: index)
+                    let audioH = audioBarHeight(index: index, level: displayLevel)
                     
-                    // Pulse: gaussian bump that sweeps left → right
-                    let distance = abs(Double(index) - pulseCenter)
-                    let pulse = exp(-distance * distance / 0.6)
-                    let pulseH = 18.0 * CGFloat(pulse) * pulseStrength
+                    // Wave: broader gaussian for a smooth rolling feel
+                    let distance = abs(Double(index) - waveCenter)
+                    let wave = exp(-distance * distance / 1.5)
+                    let waveH = 18.0 * CGFloat(wave) * waveStrength
                     
                     let minH: CGFloat = 3
                     let maxH: CGFloat = 24
-                    let barHeight = min(maxH, max(minH, audioH + pulseH))
+                    let barHeight = min(maxH, max(minH, audioH + waveH))
                     
                     RoundedRectangle(cornerRadius: 2)
                         .fill(Color.white.opacity(0.9))
                         .frame(width: 4, height: barHeight)
-                        .animation(.easeOut(duration: 0.08), value: level)
                 }
             }
         }
+        .onChange(of: level) { newLevel in
+            if !isProcessing {
+                // During recording: track audio level instantly
+                displayLevel = newLevel
+            }
+        }
         .onChange(of: isProcessing) { processing in
-            withAnimation(.easeInOut(duration: 0.4)) {
-                pulseStrength = processing ? 1 : 0
+            if processing {
+                // Smoothly decay audio bars to rest, then bring in wave
+                withAnimation(.easeOut(duration: 0.35)) {
+                    displayLevel = 0
+                }
+                withAnimation(.easeIn(duration: 0.35).delay(0.15)) {
+                    waveStrength = 1
+                }
+            } else {
+                waveStrength = 0
             }
         }
     }
     
-    private func audioBarHeight(index: Int) -> CGFloat {
+    private func audioBarHeight(index: Int, level: CGFloat) -> CGFloat {
         let center = CGFloat(barCount - 1) / 2.0
         let distFromCenter = abs(CGFloat(index) - center) / center
         let positionScale = 1.0 - (distFromCenter * 0.5)
