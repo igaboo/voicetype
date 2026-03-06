@@ -37,6 +37,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     private var recordingStart: Date?
     private var isEnabled = true
     private var enableMenuItem: NSMenuItem!
+    private var peakAudioLevel: Float = 0
     
     // Config
     private var config: [String: Any] = [:]
@@ -234,11 +235,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         recordingStart = Date()
         updateIcon(.recording)
         overlayPanel.showRecording()
+        peakAudioLevel = 0
         NSSound(named: "Blow")?.play()
         
         // Wire up audio level updates to the overlay
         audioRecorder.onLevelUpdate = { [weak self] level in
             self?.overlayPanel.updateLevel(level)
+            if level > (self?.peakAudioLevel ?? 0) {
+                self?.peakAudioLevel = level
+            }
         }
         
         do {
@@ -275,6 +280,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             state = .idle
             updateIcon(.idle)
             overlayPanel.dismiss()
+            return
+        }
+        
+        // Skip if no meaningful audio was detected (prevents hallucination)
+        log("Peak audio level: \(peakAudioLevel)")
+        if peakAudioLevel < 0.05 {
+            log("Silence detected (peak \(peakAudioLevel) < 0.05) — skipping transcription")
+            finishProcessing()
             return
         }
         
