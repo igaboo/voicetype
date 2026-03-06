@@ -211,25 +211,30 @@ class AudioTranscriber {
             return
         }
         
-        log("Transcribing with \(provider.rawValue), model=\(model), audio=\(audioData.count) bytes")
+        // Scale timeout with audio length: ~15s base + 1s per second of audio
+        // 16-bit PCM WAV at typical sample rates ≈ 32KB/s (mono 16kHz) to 96KB/s (stereo 48kHz)
+        let estimatedSeconds = Double(audioData.count) / 64_000  // conservative middle estimate
+        let timeout = max(15.0, 15.0 + estimatedSeconds)
+        
+        log("Transcribing with \(provider.rawValue), model=\(model), audio=\(audioData.count) bytes, timeout=\(String(format: "%.0f", timeout))s")
         
         switch provider {
         case .none:
             completion(.failure(FormatterError.unsupportedProvider))
         case .gemini:
-            callGemini(audioData: audioData, style: style, completion: completion)
+            callGemini(audioData: audioData, style: style, timeout: timeout, completion: completion)
         case .openai:
-            callOpenAITranscribe(audioData: audioData, completion: completion)
+            callOpenAITranscribe(audioData: audioData, timeout: timeout, completion: completion)
         case .deepgram:
-            callDeepgram(audioData: audioData, completion: completion)
+            callDeepgram(audioData: audioData, timeout: timeout, completion: completion)
         case .elevenlabs:
-            callElevenLabs(audioData: audioData, completion: completion)
+            callElevenLabs(audioData: audioData, timeout: timeout, completion: completion)
         }
     }
     
     // MARK: Gemini
     
-    private func callGemini(audioData: Data, style: FormattingStyle?, completion: @escaping (Result<String, Error>) -> Void) {
+    private func callGemini(audioData: Data, style: FormattingStyle?, timeout: TimeInterval, completion: @escaping (Result<String, Error>) -> Void) {
         let base64Audio = audioData.base64EncodedString()
         let prompt = style?.audioPrompt ?? FormattingStyle.plainTranscriptionPrompt
         let urlString = "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent?key=\(apiKey)"
@@ -241,7 +246,7 @@ class AudioTranscriber {
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         
         let body: [String: Any] = [
@@ -275,7 +280,7 @@ class AudioTranscriber {
     
     // MARK: OpenAI
     
-    private func callOpenAITranscribe(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+    private func callOpenAITranscribe(audioData: Data, timeout: TimeInterval, completion: @escaping (Result<String, Error>) -> Void) {
         guard let url = URL(string: "https://api.openai.com/v1/audio/transcriptions") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
@@ -284,7 +289,7 @@ class AudioTranscriber {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = multipartBody(boundary: boundary, audioData: audioData, fields: ["model": model])
@@ -305,7 +310,7 @@ class AudioTranscriber {
     
     // MARK: Deepgram
     
-    private func callDeepgram(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+    private func callDeepgram(audioData: Data, timeout: TimeInterval, completion: @escaping (Result<String, Error>) -> Void) {
         guard let url = URL(string: "https://api.deepgram.com/v1/listen?model=\(model)&smart_format=true&punctuate=true") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
@@ -313,7 +318,7 @@ class AudioTranscriber {
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.httpBody = audioData
@@ -336,7 +341,7 @@ class AudioTranscriber {
     
     // MARK: ElevenLabs
     
-    private func callElevenLabs(audioData: Data, completion: @escaping (Result<String, Error>) -> Void) {
+    private func callElevenLabs(audioData: Data, timeout: TimeInterval, completion: @escaping (Result<String, Error>) -> Void) {
         guard let url = URL(string: "https://api.elevenlabs.io/v1/speech-to-text") else {
             completion(.failure(FormatterError.invalidEndpoint))
             return
@@ -345,7 +350,7 @@ class AudioTranscriber {
         let boundary = UUID().uuidString
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        request.timeoutInterval = timeout
         request.setValue(apiKey, forHTTPHeaderField: "xi-api-key")
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.httpBody = multipartBody(boundary: boundary, audioData: audioData, fields: ["model_id": model])
