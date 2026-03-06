@@ -276,32 +276,25 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         
         // Determine flow based on configured engines
         if let apiTranscriber = audioTranscriber {
-            // Can we do transcription + formatting in one shot? (Gemini as both)
-            let canOneShot = apiTranscriber.provider.canAlsoFormat
-                && textFormatter != nil
-                && apiTranscriber.provider.rawValue == textFormatter?.provider.rawValue
-            
-            if canOneShot {
-                // One-shot: Gemini transcribe + format
-                log("One-shot: \(apiTranscriber.provider.rawValue) transcribe+format")
-                apiTranscriber.transcribe(audioURL: audioURL, style: formattingStyle) { [weak self] result in
-                    DispatchQueue.main.async {
-                        self?.handleResult(result)
+            // Quick Apple Speech pre-check: if no words detected, skip API call
+            log("Pre-check: running Apple Speech to detect speech...")
+            transcriber.transcribe(audioURL: audioURL) { [weak self] preResult in
+                DispatchQueue.main.async {
+                    let hasSpeech: Bool
+                    if case .success(let preText) = preResult {
+                        hasSpeech = !preText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    } else {
+                        hasSpeech = false
                     }
-                }
-            } else {
-                // Two-step: API transcribe → optional format
-                log("Two-step: \(apiTranscriber.provider.rawValue) transcribe → \(textFormatter?.provider.rawValue ?? "none") format")
-                apiTranscriber.transcribe(audioURL: audioURL) { [weak self] result in
-                    DispatchQueue.main.async {
-                        switch result {
-                        case .success(let text):
-                            self?.maybeFormat(text)
-                        case .failure(let error):
-                            log("❌ Transcription failed: \(error)")
-                            self?.showError(error)
-                        }
+                    
+                    guard hasSpeech else {
+                        log("Pre-check: no speech detected — skipping API call")
+                        self?.finishProcessing()
+                        return
                     }
+                    
+                    log("Pre-check: speech detected, proceeding with API")
+                    self?.sendToAPI(apiTranscriber: apiTranscriber, audioURL: audioURL)
                 }
             }
         } else {
@@ -314,6 +307,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                         self?.maybeFormat(text)
                     case .failure(let error):
                         log("❌ Apple Speech failed: \(error)")
+                        self?.showError(error)
+                    }
+                }
+            }
+        }
+    }
+    
+    /// Send audio to the configured API transcription provider
+    private func sendToAPI(apiTranscriber: AudioTranscriber, audioURL: URL) {
+        let canOneShot = apiTranscriber.provider.canAlsoFormat
+            && textFormatter != nil
+            && apiTranscriber.provider.rawValue == textFormatter?.provider.rawValue
+        
+        if canOneShot {
+            log("One-shot: \(apiTranscriber.provider.rawValue) transcribe+format")
+            apiTranscriber.transcribe(audioURL: audioURL, style: formattingStyle) { [weak self] result in
+                DispatchQueue.main.async {
+                    self?.handleResult(result)
+                }
+            }
+        } else {
+            log("Two-step: \(apiTranscriber.provider.rawValue) transcribe → \(textFormatter?.provider.rawValue ?? "none") format")
+            apiTranscriber.transcribe(audioURL: audioURL) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let text):
+                        self?.maybeFormat(text)
+                    case .failure(let error):
+                        log("❌ Transcription failed: \(error)")
                         self?.showError(error)
                     }
                 }
