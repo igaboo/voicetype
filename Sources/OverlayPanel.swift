@@ -227,8 +227,15 @@ struct WaveAnimationBars: View {
                     
                     let barHeight = min(28.0, max(6.0, audioH + waveH))
                     
+                    // Shimmer: opacity pulses with the wave — bright at peak, dim at rest
+                    let dimOpacity = 0.35
+                    let brightOpacity = 0.95
+                    let shimmer = dimOpacity + (brightOpacity - dimOpacity) * Double(wave) * Double(waveStrength)
+                    // When wave hasn't faded in yet, keep full opacity
+                    let opacity = waveStrength > 0 ? shimmer : 0.9
+                    
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.white.opacity(0.9))
+                        .fill(Color.white.opacity(opacity))
                         .frame(width: 3, height: barHeight)
                 }
             }
