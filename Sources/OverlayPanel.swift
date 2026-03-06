@@ -102,11 +102,8 @@ struct OverlayView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 8)
         .frame(height: 40)
-        .background(
-            VisualEffectBackground()
-        )
-        .clipShape(Capsule())
-        .shadow(color: .black.opacity(0.2), radius: 8, y: 2)
+        .background(.ultraThinMaterial, in: Capsule())
+        .shadow(color: .black.opacity(0.3), radius: 10, y: 3)
     }
 }
 
@@ -157,14 +154,4 @@ struct WaveformBar: View {
     }
 }
 
-struct VisualEffectBackground: NSViewRepresentable {
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let view = NSVisualEffectView()
-        view.material = .hudWindow
-        view.blendingMode = .behindWindow
-        view.state = .active
-        return view
-    }
-    
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
+
