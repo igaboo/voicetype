@@ -372,6 +372,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         overlayPanel.dismiss()
     }
     
+    private func showNotification(title: String, body: String) {
+        let notification = NSUserNotification()
+        notification.title = title
+        notification.informativeText = body
+        NSUserNotificationCenter.default.deliver(notification)
+    }
+    
     /// Show a brief error message in the overlay pill, then auto-dismiss
     private func showError(_ error: Error) {
         state = .idle
