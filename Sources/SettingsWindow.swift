@@ -105,10 +105,18 @@ struct SettingsView: View {
                 } header: {
                     Text("AI Provider")
                 } footer: {
-                    if selectedProvider == .none && selectedStyle != .verbatim {
+                    if selectedProvider == .gemini {
+                        Text("Gemini handles both transcription and formatting — Apple Speech is skipped entirely.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    } else if selectedProvider == .none && selectedStyle != .verbatim {
                         Text("⚠️ Select a provider and enter an API key to enable AI formatting.")
                             .font(.caption)
                             .foregroundColor(.orange)
+                    } else if selectedProvider != .none && selectedProvider != .gemini {
+                        Text("Uses Apple Speech for transcription, then \(selectedProvider.label) for formatting.")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
             }

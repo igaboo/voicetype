@@ -201,14 +201,21 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         let provider = APIProvider.allCases.first { $0.rawValue == providerName } ?? .none
         let style = FormattingStyle.allCases.first { $0.rawValue == styleName } ?? .verbatim
         
-        if provider != .none && style != .verbatim && !apiKey.isEmpty {
-            textFormatter = TextFormatter(
-                provider: provider,
-                apiKey: apiKey,
-                model: model?.isEmpty == true ? nil : model,
-                style: style
-            )
-            log("Formatter: \(provider.rawValue) / \(style.rawValue)")
+        if provider != .none && !apiKey.isEmpty {
+            // Gemini works with any style (it handles transcription)
+            // OpenAI/Anthropic only make sense with non-verbatim styles
+            if provider.handlesTranscription || style != .verbatim {
+                textFormatter = TextFormatter(
+                    provider: provider,
+                    apiKey: apiKey,
+                    model: model?.isEmpty == true ? nil : model,
+                    style: style
+                )
+                log("Formatter: \(provider.rawValue) / \(style.rawValue)")
+            } else {
+                textFormatter = nil
+                log("Formatter: disabled (verbatim + text-only provider)")
+            }
         } else {
             textFormatter = nil
             log("Formatter: disabled")
@@ -271,38 +278,59 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             return
         }
         
-        transcriber.transcribe(audioURL: audioURL) { [weak self] result in
-            DispatchQueue.main.async {
-                switch result {
-                case .success(let text):
-                    log("Transcription result: \"\(text)\"")
-                    if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        self?.finishProcessing()
-                        return
-                    }
-                    // Apply AI formatting if configured
-                    if let formatter = self?.textFormatter {
-                        formatter.format(text) { formatResult in
-                            DispatchQueue.main.async {
-                                switch formatResult {
-                                case .success(let formatted):
-                                    log("Formatted: \"\(formatted)\"")
-                                    self?.pasteManager.paste(formatted)
-                                case .failure(let error):
-                                    log("Formatting failed, using raw: \(error)")
-                                    self?.pasteManager.paste(text)
-                                }
-                                self?.finishProcessing()
-                            }
+        // If provider handles transcription (Gemini), skip Apple Speech entirely
+        if let formatter = textFormatter, formatter.handlesTranscription {
+            log("Using \(formatter) for transcription + formatting")
+            formatter.transcribeAndFormat(audioURL: audioURL) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let text):
+                        log("Transcribe+format result: \"\(text)\"")
+                        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !trimmed.isEmpty {
+                            self?.pasteManager.paste(trimmed)
                         }
-                    } else {
-                        self?.pasteManager.paste(text)
+                    case .failure(let error):
+                        log("❌ Transcribe+format failed: \(error)")
+                        self?.showNotification(title: "VoiceType", body: "Transcription failed: \(error.localizedDescription)")
+                    }
+                    self?.finishProcessing()
+                }
+            }
+        } else {
+            // Apple Speech → optional AI formatting (existing flow)
+            transcriber.transcribe(audioURL: audioURL) { [weak self] result in
+                DispatchQueue.main.async {
+                    switch result {
+                    case .success(let text):
+                        log("Transcription result: \"\(text)\"")
+                        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            self?.finishProcessing()
+                            return
+                        }
+                        if let formatter = self?.textFormatter {
+                            formatter.format(text) { formatResult in
+                                DispatchQueue.main.async {
+                                    switch formatResult {
+                                    case .success(let formatted):
+                                        log("Formatted: \"\(formatted)\"")
+                                        self?.pasteManager.paste(formatted)
+                                    case .failure(let error):
+                                        log("Formatting failed, using raw: \(error)")
+                                        self?.pasteManager.paste(text)
+                                    }
+                                    self?.finishProcessing()
+                                }
+                            }
+                        } else {
+                            self?.pasteManager.paste(text)
+                            self?.finishProcessing()
+                        }
+                    case .failure(let error):
+                        log("❌ Transcription failed: \(error)")
+                        self?.showNotification(title: "VoiceType", body: "Transcription failed: \(error.localizedDescription)")
                         self?.finishProcessing()
                     }
-                case .failure(let error):
-                    log("❌ Transcription failed: \(error)")
-                    self?.showNotification(title: "VoiceType", body: "Transcription failed: \(error.localizedDescription)")
-                    self?.finishProcessing()
                 }
             }
         }
