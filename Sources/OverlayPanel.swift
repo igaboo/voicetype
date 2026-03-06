@@ -153,31 +153,33 @@ struct AudioReactiveBars: View {
     let barCount: Int
     
     // Per-bar scale offsets to break symmetry — each bar has a unique personality
-    // Exponential rise from edges to center — dramatic arch
-    private let barScales: [CGFloat] = [0.08, 0.15, 0.3, 0.52, 0.8, 1.0, 0.85, 0.58, 0.33, 0.17, 0.1]
+    // Exponential rise from edges to center
+    private let barScales: [CGFloat] = [0.05, 0.12, 0.25, 0.45, 0.72, 1.0, 0.78, 0.5, 0.28, 0.14, 0.06]
     
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<barCount, id: \.self) { index in
                 let scale = barScales[index]
                 
-                let minH: CGFloat = 6
+                let minH: CGFloat = 5
                 let maxH: CGFloat = 28
                 
                 let barCeiling = minH + (maxH - minH) * scale
                 
-                let boosted = pow(level, 0.25)
+                // Very responsive — even quiet audio moves bars noticeably
+                let boosted = pow(level, 0.2)
                 let targetHeight = minH + (barCeiling - minH) * boosted
                 
-                // Gentle per-bar variation — smooth, not jittery
-                let seed = sin(Double(index) * 2.7 + Double(level) * 8.0)
-                let variation = CGFloat(seed) * 2.0 * boosted
+                // Each bar gets its own phase-shifted wobble based on audio
+                let wobble1 = sin(Double(index) * 1.9 + Double(level) * 14.0)
+                let wobble2 = sin(Double(index) * 3.7 + Double(level) * 22.0)
+                let variation = CGFloat(wobble1 * 1.8 + wobble2 * 1.2) * boosted * scale
                 let barHeight = max(minH, min(barCeiling, targetHeight + variation))
                 
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Color.white.opacity(0.9))
                     .frame(width: 3, height: barHeight)
-                    .animation(.easeOut(duration: 0.12), value: level)
+                    .animation(.easeOut(duration: 0.1), value: level)
             }
         }
     }
@@ -209,10 +211,10 @@ struct WaveAnimationBars: View {
                     let boosted = pow(lastLevel * displayLevel, 0.5)
                     let audioH = max(6.0, min(28.0, 6.0 + 22.0 * boosted * positionScale))
                     
-                    // Wave overlay — wider gaussian for a smooth rolling wave
+                    // Wave overlay — very wide and gentle rolling wave
                     let distance = abs(Double(index) - waveCenter)
-                    let wave = exp(-distance * distance / 3.5)
-                    let waveH = 18.0 * CGFloat(wave) * waveStrength
+                    let wave = exp(-distance * distance / 6.0)
+                    let waveH = 14.0 * CGFloat(wave) * waveStrength
                     
                     let barHeight = min(28.0, max(6.0, audioH + waveH))
                     
