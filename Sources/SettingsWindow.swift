@@ -5,59 +5,71 @@ protocol SettingsDelegate: AnyObject {
     func settingsDidChange()
 }
 
+// MARK: - UserDefaults Keys
+
+enum SettingsKey {
+    static let hotkey = "hotkey"
+    static let txProvider = "txProvider"
+    static let txApiKey = "txApiKey"
+    static let txModel = "txModel"
+    static let fmtProvider = "fmtProvider"
+    static let fmtApiKey = "fmtApiKey"
+    static let fmtModel = "fmtModel"
+    static let fmtStyle = "fmtStyle"
+    static let onboardingComplete = "onboardingComplete"
+}
+
 // MARK: - SwiftUI Settings View
 
 struct SettingsView: View {
     @State private var hotkey: String
-    
+
     // Transcription
     @State private var txProvider: String
     @State private var txApiKey: String
     @State private var txModel: String
-    
+
     // Formatting
     @State private var fmtProvider: String
     @State private var fmtApiKey: String
     @State private var fmtModel: String
     @State private var fmtStyle: String
     @State private var fmtUseSameKey: Bool
-    
-    var onSave: (([String: Any]) -> Void)?
+
+    var onSave: (() -> Void)?
     var onCancel: (() -> Void)?
-    
-    init(config: [String: Any]) {
-        let tx = config["transcription"] as? [String: Any] ?? [:]
-        let fmt = config["formatting"] as? [String: Any] ?? [:]
-        
-        _hotkey = State(initialValue: config["hotkey"] as? String ?? "fn")
-        _txProvider = State(initialValue: tx["provider"] as? String ?? "none")
-        _txApiKey = State(initialValue: tx["api_key"] as? String ?? "")
-        _txModel = State(initialValue: tx["model"] as? String ?? "")
-        _fmtProvider = State(initialValue: fmt["provider"] as? String ?? "none")
-        _fmtApiKey = State(initialValue: fmt["api_key"] as? String ?? "")
-        _fmtModel = State(initialValue: fmt["model"] as? String ?? "")
-        _fmtStyle = State(initialValue: fmt["style"] as? String ?? "formatted")
-        
-        let txKey = tx["api_key"] as? String ?? ""
-        let fKey = fmt["api_key"] as? String ?? ""
+
+    init() {
+        let d = UserDefaults.standard
+        _hotkey = State(initialValue: d.string(forKey: SettingsKey.hotkey) ?? "fn")
+        _txProvider = State(initialValue: d.string(forKey: SettingsKey.txProvider) ?? "none")
+        _txApiKey = State(initialValue: d.string(forKey: SettingsKey.txApiKey) ?? "")
+        _txModel = State(initialValue: d.string(forKey: SettingsKey.txModel) ?? "")
+        _fmtProvider = State(initialValue: d.string(forKey: SettingsKey.fmtProvider) ?? "none")
+        _fmtApiKey = State(initialValue: d.string(forKey: SettingsKey.fmtApiKey) ?? "")
+        _fmtModel = State(initialValue: d.string(forKey: SettingsKey.fmtModel) ?? "")
+        _fmtStyle = State(initialValue: d.string(forKey: SettingsKey.fmtStyle) ?? "formatted")
+
+        let txKey = d.string(forKey: SettingsKey.txApiKey) ?? ""
+        let fKey = d.string(forKey: SettingsKey.fmtApiKey) ?? ""
         _fmtUseSameKey = State(initialValue: fKey.isEmpty || fKey == txKey)
     }
-    
+
     private var selectedTxProvider: TranscriptionProvider {
         TranscriptionProvider.allCases.first { $0.rawValue == txProvider } ?? .none
     }
-    
+
     private var selectedFmtProvider: FormattingProvider {
         FormattingProvider.allCases.first { $0.rawValue == fmtProvider } ?? .none
     }
-    
+
     private var selectedStyle: FormattingStyle {
         FormattingStyle.allCases.first { $0.rawValue == fmtStyle } ?? .formatted
     }
-    
+
     private var hasTxProvider: Bool { selectedTxProvider != .none }
     private var hasFmtProvider: Bool { selectedFmtProvider != .none }
-    
+
     var body: some View {
         VStack(spacing: 0) {
             Form {
@@ -69,7 +81,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
                 }
-                
+
                 // Transcription
                 Section {
                     Picker("Provider", selection: $txProvider) {
@@ -78,10 +90,10 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    
+
                     if hasTxProvider {
                         TextField("API Key", text: $txApiKey, prompt: Text("Required"))
-                        
+
                         TextField("Model", text: $txModel, prompt: Text(selectedTxProvider.defaultModel))
                     }
                 } header: {
@@ -92,7 +104,7 @@ struct SettingsView: View {
                             .font(.caption).foregroundColor(.secondary)
                     }
                 }
-                
+
                 // Formatting
                 Section {
                     Picker("Provider", selection: $fmtProvider) {
@@ -101,25 +113,25 @@ struct SettingsView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    
+
                     if hasFmtProvider {
                         let shareKey = fmtUseSameKey && hasTxProvider
                         TextField("API Key", text: shareKey ? $txApiKey : $fmtApiKey, prompt: Text("Required"))
                             .disabled(shareKey)
-                        
+
                         if hasTxProvider {
                             Toggle("Use same API key", isOn: $fmtUseSameKey)
                         }
-                        
+
                         TextField("Model", text: $fmtModel, prompt: Text(selectedFmtProvider.defaultModel))
-                        
+
                         Picker("Style", selection: $fmtStyle) {
                             ForEach(FormattingStyle.allCases, id: \.rawValue) { s in
                                 Text(s.label).tag(s.rawValue)
                             }
                         }
                         .pickerStyle(.menu)
-                        
+
                         // Example preview
                         VStack(alignment: .leading, spacing: 6) {
                             Text("**\(selectedStyle.label)** — \(selectedStyle.description)")
@@ -148,29 +160,28 @@ struct SettingsView: View {
             .scrollContentBackground(.hidden)
             .animation(.easeInOut(duration: 0.2), value: txProvider)
             .animation(.easeInOut(duration: 0.2), value: fmtProvider)
-            
+
             // Buttons
             HStack {
+                Button("Reset Onboarding") {
+                    UserDefaults.standard.set(false, forKey: SettingsKey.onboardingComplete)
+                    onSave?()
+                }
+                .foregroundColor(.secondary)
                 Spacer()
                 Button("Cancel") { onCancel?() }
                     .keyboardShortcut(.cancelAction)
                 Button("Save") {
-                    let savedFmtKey = fmtUseSameKey ? "" : fmtApiKey
-                    let config: [String: Any] = [
-                        "hotkey": hotkey,
-                        "transcription": [
-                            "provider": txProvider,
-                            "api_key": txApiKey,
-                            "model": txModel
-                        ] as [String: Any],
-                        "formatting": [
-                            "provider": fmtProvider,
-                            "api_key": savedFmtKey,
-                            "model": fmtModel,
-                            "style": fmtStyle
-                        ] as [String: Any]
-                    ]
-                    onSave?(config)
+                    let d = UserDefaults.standard
+                    d.set(hotkey, forKey: SettingsKey.hotkey)
+                    d.set(txProvider, forKey: SettingsKey.txProvider)
+                    d.set(txApiKey, forKey: SettingsKey.txApiKey)
+                    d.set(txModel, forKey: SettingsKey.txModel)
+                    d.set(fmtProvider, forKey: SettingsKey.fmtProvider)
+                    d.set(fmtUseSameKey ? "" : fmtApiKey, forKey: SettingsKey.fmtApiKey)
+                    d.set(fmtModel, forKey: SettingsKey.fmtModel)
+                    d.set(fmtStyle, forKey: SettingsKey.fmtStyle)
+                    onSave?()
                 }
                 .keyboardShortcut(.defaultAction)
             }
@@ -186,7 +197,7 @@ struct SettingsView: View {
 
 class SettingsWindow: NSWindow {
     weak var settingsDelegate: SettingsDelegate?
-    
+
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 600),
@@ -194,56 +205,31 @@ class SettingsWindow: NSWindow {
             backing: .buffered,
             defer: false
         )
-        
+
         title = "Yap Settings"
         isReleasedWhenClosed = false
         center()
         loadUI()
     }
-    
+
     private func loadUI() {
-        let config = Self.loadConfig()
-        
-        var settingsView = SettingsView(config: config)
-        
-        settingsView.onSave = { [weak self] config in
-            Self.saveConfig(config)
+        var settingsView = SettingsView()
+
+        settingsView.onSave = { [weak self] in
             self?.settingsDelegate?.settingsDidChange()
             self?.close()
         }
-        
+
         settingsView.onCancel = { [weak self] in
             self?.close()
         }
-        
+
         contentView = NSHostingView(rootView: settingsView)
     }
-    
+
     override func makeKeyAndOrderFront(_ sender: Any?) {
         loadUI()
         super.makeKeyAndOrderFront(sender)
     }
-    
-    // MARK: - Config File
-    
-    static func configURL() -> URL {
-        FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/yap/config.json")
-    }
-    
-    static func loadConfig() -> [String: Any] {
-        guard let data = try? Data(contentsOf: configURL()),
-              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return [:]
-        }
-        return json
-    }
-    
-    static func saveConfig(_ config: [String: Any]) {
-        let url = configURL()
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        if let data = try? JSONSerialization.data(withJSONObject: config, options: .prettyPrinted) {
-            try? data.write(to: url)
-        }
-    }
+
 }

@@ -28,6 +28,9 @@ cp Resources/Info.plist "$APP_BUNDLE/Contents/"
 # Copy menu bar icons
 cp Resources/MenuIconTemplate*.png "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
 
+# Copy bundled sounds
+cp Resources/Sounds/*.aiff "$APP_BUNDLE/Contents/Resources/" 2>/dev/null || true
+
 # Generate .icns from AppIcon.png if it exists
 if [ -f Resources/AppIcon.png ]; then
     ICONSET="$BUILD_DIR/AppIcon.iconset"

@@ -5,7 +5,8 @@ import SwiftUI
 /// with audio-reactive waveform bars and a processing spinner.
 class OverlayPanel: NSPanel {
     private let overlayState = OverlayState()
-    
+    private var errorDismissWork: DispatchWorkItem?
+
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
     
@@ -13,7 +14,7 @@ class OverlayPanel: NSPanel {
         let width: CGFloat = 1400
         let height: CGFloat = 700
 
-        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let screenFrame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let x = screenFrame.midX - width / 2
         let y = screenFrame.minY + 330 - height
         
@@ -41,6 +42,8 @@ class OverlayPanel: NSPanel {
     }
     
     func showRecording() {
+        errorDismissWork?.cancel()
+        errorDismissWork = nil
         overlayState.audioLevel = 0
         alphaValue = 1
         orderFront(nil)
@@ -63,9 +66,12 @@ class OverlayPanel: NSPanel {
 
     func showError(_ message: String) {
         overlayState.mode = .error(message)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        errorDismissWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             self?.dismiss()
         }
+        errorDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0, execute: work)
     }
 
     func dismiss() {
@@ -79,6 +85,7 @@ class OverlayPanel: NSPanel {
     }
 
     func advanceOnboarding(to step: OnboardingStep) {
+        ignoresMouseEvents = true
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.5)) {
             overlayState.onboardingStep = step
         }
@@ -99,11 +106,25 @@ class OverlayPanel: NSPanel {
         overlayState.shakeToken = UUID()
     }
 
+    func pressDown() {
+        withAnimation(.spring(response: 0.2, dampingFraction: 0.7)) {
+            overlayState.isPressed = true
+        }
+    }
+
+    func pressRelease() {
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.5)) {
+            overlayState.isPressed = false
+        }
+    }
+
     func completeOnboarding() {
+        ignoresMouseEvents = true
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
             overlayState.onboardingStep = nil
         }
     }
+
 }
 
 // MARK: - State
@@ -126,9 +147,12 @@ struct ShakeEffect: GeometryEffect {
     }
 }
 
-enum OnboardingStep: Equatable {
-    case dictatePrompt
-    case apiKeyPrompt
+enum OnboardingStep: Hashable {
+    case tryIt
+    case success(String)
+    case apiTip
+    case formattingTip
+    case welcome
     case speakTip
     case holdTip
 }
@@ -140,6 +164,7 @@ class OverlayState: ObservableObject {
     @Published var onboardingStep: OnboardingStep? = nil
     @Published var hotkeyLabel: String = "fn"
     @Published var shakeToken: UUID = UUID()
+    @Published var isPressed: Bool = false
     var isOnboarding: Bool { onboardingStep != nil }
 }
 
@@ -149,8 +174,19 @@ struct OverlayView: View {
     @ObservedObject var state: OverlayState
     @State private var shakeProgress: CGFloat = 0
 
-    private var isActive: Bool { state.mode != .idle }
-    private var isExpanded: Bool { state.mode != .idle }
+    private var isActive: Bool { state.mode != .idle || state.isOnboarding }
+    private var isExpanded: Bool { state.mode != .idle || state.isOnboarding }
+
+    private var gradientEnergy: CGFloat {
+        switch state.mode {
+        case .recording:
+            return 1.0
+        case .processing:
+            return 0.6
+        default:
+            return state.isOnboarding ? 0.3 : 0.4
+        }
+    }
 
     private var audioBounceFactor: CGFloat {
         guard state.mode == .recording else { return 1.0 }
@@ -161,9 +197,9 @@ struct OverlayView: View {
     var body: some View {
         ZStack {
             if isExpanded {
-                LavaLampBackground()
-                    .offset(y: -20)
+                LavaLampBackground(energy: gradientEnergy)
                     .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.8), value: gradientEnergy)
             }
 
             VStack(spacing: 0) {
@@ -176,6 +212,7 @@ struct OverlayView: View {
                             .transition(.opacity)
                     }
                 }
+                .fixedSize()
                 .frame(minWidth: 40, minHeight: isExpanded ? 28 : 8)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
@@ -192,17 +229,20 @@ struct OverlayView: View {
                     Capsule()
                         .strokeBorder(Color.white.opacity(isExpanded ? 0.3 : 0.35), lineWidth: isExpanded ? 1 : 1.5)
                 )
-                .scaleEffect((isExpanded ? 1.0 : 0.5) * audioBounceFactor)
+                .scaleEffect((isExpanded ? 1.0 : 0.5) * audioBounceFactor * (state.isPressed ? 0.85 : 1.0))
+                .opacity(state.isPressed ? 0.7 : 1.0)
                 .offset(y: isExpanded ? 0 : 40)
                 .modifier(ShakeEffect(progress: shakeProgress))
                 .animation(.spring(response: 0.25, dampingFraction: 0.45, blendDuration: 0.05), value: state.audioLevel)
-                .overlay(alignment: .top) {
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.onboardingStep)
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.mode)
+                .overlay(alignment: .bottom) {
                     if let step = state.onboardingStep,
-                   state.mode == .idle || state.mode == .noSpeech {
+                       state.mode == .idle || state.mode == .noSpeech {
                         OnboardingCardView(step: step, hotkeyLabel: state.hotkeyLabel)
                             .id(step)
                             .fixedSize()
-                            .offset(y: -28)
+                            .offset(y: -56)
                             .transition(.opacity.combined(with: .offset(y: 8)))
                     }
                 }
@@ -218,33 +258,69 @@ struct OverlayView: View {
         }
     }
 
+    private var showHoldPromptInPill: Bool {
+        guard let step = state.onboardingStep, state.mode == .idle || state.mode == .noSpeech else { return false }
+        switch step {
+        case .success, .apiTip, .formattingTip, .welcome:
+            return true
+        default:
+            return false
+        }
+    }
+
     @ViewBuilder
     private var pillContent: some View {
-        switch state.mode {
-        case .recording, .processing:
-            WaveformBars(level: CGFloat(state.audioLevel), bandLevels: state.bandLevels, isProcessing: state.mode == .processing)
+        if showHoldPromptInPill {
+            HStack(spacing: 6) {
+                Text("Hold")
+                KeyCapView(label: state.hotkeyLabel)
+                Text(state.onboardingStep == .welcome ? "to finish" : "to continue")
+            }
+            .font(.system(size: 12, weight: .medium))
+            .foregroundColor(.white.opacity(0.8))
+            .transition(.opacity)
+        } else {
+            switch state.mode {
+            case .recording, .processing:
+                WaveformBars(level: CGFloat(state.audioLevel), bandLevels: state.bandLevels, isProcessing: state.mode == .processing)
+                    .frame(width: 52, height: 28)
+                    .transition(.opacity)
+            case .noSpeech:
+                HStack(spacing: 2) {
+                    ForEach(0..<11, id: \.self) { _ in
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(Color.white.opacity(0.25))
+                            .frame(width: 3, height: 5)
+                    }
+                }
                 .frame(width: 52, height: 28)
-        case .noSpeech:
-            HStack(spacing: 2) {
-                ForEach(0..<11, id: \.self) { _ in
-                    RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.white.opacity(0.25))
-                        .frame(width: 3, height: 5)
+                .transition(.opacity)
+            case .error(let message):
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.red)
+                        .font(.system(size: 12))
+                    Text(message)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                }
+                .transition(.opacity)
+            case .idle:
+                if state.isOnboarding {
+                    HStack(spacing: 2) {
+                        ForEach(0..<11, id: \.self) { _ in
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(Color.white.opacity(0.25))
+                                .frame(width: 3, height: 5)
+                        }
+                    }
+                    .frame(width: 52, height: 28)
+                    .transition(.opacity)
+                } else {
+                    EmptyView()
                 }
             }
-            .frame(width: 52, height: 28)
-        case .error(let message):
-            HStack(spacing: 6) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .foregroundColor(.red)
-                    .font(.system(size: 12))
-                Text(message)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundColor(.primary)
-                    .lineLimit(1)
-            }
-        case .idle:
-            EmptyView()
         }
     }
 }
@@ -252,30 +328,34 @@ struct OverlayView: View {
 // MARK: - Onboarding Views
 
 struct LavaLampBackground: View {
+    var energy: CGFloat // 0 = calm, 1 = active
+
     var body: some View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
+            let speed = 0.4 + energy * 0.6
+            let brightness = 0.25 + energy * 0.25
 
             ZStack {
                 Ellipse()
-                    .fill(Color.purple.opacity(0.5))
+                    .fill(Color.purple.opacity(brightness))
                     .frame(width: 300, height: 140)
-                    .offset(x: cos(t * 0.7) * 120, y: sin(t * 0.5) * 35)
+                    .offset(x: cos(t * 0.7 * speed) * 120, y: sin(t * 0.5 * speed) * 35)
 
                 Ellipse()
-                    .fill(Color.blue.opacity(0.45))
+                    .fill(Color.blue.opacity(brightness * 0.9))
                     .frame(width: 360, height: 160)
-                    .offset(x: sin(t * 0.6 + 1.5) * 140, y: cos(t * 0.45 + 1.0) * 40)
+                    .offset(x: sin(t * 0.6 * speed + 1.5) * 140, y: cos(t * 0.45 * speed + 1.0) * 40)
 
                 Ellipse()
-                    .fill(Color.cyan.opacity(0.4))
+                    .fill(Color.cyan.opacity(brightness * 0.85))
                     .frame(width: 280, height: 120)
-                    .offset(x: cos(t * 0.8 + 3.0) * 100, y: sin(t * 0.6 + 2.0) * 30)
+                    .offset(x: cos(t * 0.8 * speed + 3.0) * 100, y: sin(t * 0.6 * speed + 2.0) * 30)
 
                 Ellipse()
-                    .fill(Color.indigo.opacity(0.45))
+                    .fill(Color.indigo.opacity(brightness * 0.9))
                     .frame(width: 320, height: 130)
-                    .offset(x: sin(t * 0.55 + 4.5) * 130, y: cos(t * 0.7 + 3.5) * 35)
+                    .offset(x: sin(t * 0.55 * speed + 4.5) * 130, y: cos(t * 0.7 * speed + 3.5) * 35)
             }
             .blur(radius: 55)
         }
@@ -310,14 +390,28 @@ struct OnboardingCardView: View {
     var body: some View {
         Group {
             switch step {
-            case .dictatePrompt:
+            case .tryIt:
                 HStack(spacing: 6) {
-                    Text("Press")
+                    Text("Hold")
                     KeyCapView(label: hotkeyLabel)
-                    Text("to start dictating")
+                    Text("and speak to get started")
                 }
-            case .apiKeyPrompt:
-                Text("For smarter results, add an API key in Settings")
+            case .success(let text):
+                VStack(spacing: 6) {
+                    Text("You said:")
+                        .foregroundColor(.white.opacity(0.6))
+                    Text("\"\(text)\"")
+                        .italic()
+                        .multilineTextAlignment(.center)
+                }
+            case .apiTip:
+                Text("Add an API key in the menu bar for better transcription")
+                    .multilineTextAlignment(.center)
+            case .formattingTip:
+                Text("Enable formatting in Settings to clean up grammar and punctuation automatically")
+                    .multilineTextAlignment(.center)
+            case .welcome:
+                Text("You're all set — enjoy! 🎉")
                     .multilineTextAlignment(.center)
             case .speakTip:
                 HStack(spacing: 6) {

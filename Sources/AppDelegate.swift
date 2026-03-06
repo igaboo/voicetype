@@ -37,32 +37,40 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     private var enableMenuItem: NSMenuItem!
     private var peakAudioLevel: Float = 0
     private var chimeWorkItem: DispatchWorkItem?
-    private var chimeSound: NSSound?
+    private var onboardingHoldWork: DispatchWorkItem?
+    private var soundPlayers: [String: AVAudioPlayer] = [:]
+
+    private func preloadSounds() {
+        for name in ["Pop", "Blow", "Submarine"] {
+            guard let url = Bundle.main.url(forResource: name, withExtension: "aiff") else { continue }
+            guard let player = try? AVAudioPlayer(contentsOf: url) else { continue }
+            player.prepareToPlay()
+            soundPlayers[name] = player
+        }
+    }
+
+    private func playSound(_ name: String) {
+        guard let player = soundPlayers[name] else { return }
+        player.currentTime = 0
+        player.play()
+    }
+    private var tipDismissWork: DispatchWorkItem?
     
     // Separate transcription and formatting engines
     private var audioTranscriber: AudioTranscriber?
     private var textFormatter: TextFormatter?
     private var formattingStyle: FormattingStyle = .formatted
-    
-    // Config
-    private var config: [String: Any] = [:]
-    
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         log("App launched")
-        loadConfig()
         setupStatusItem()
         requestPermissions()
         setupHotkey()
         setupEngines()
+        preloadSounds()
         overlayPanel.orderFront(nil)
         startOnboardingIfNeeded()
         log("Setup complete — ready")
-    }
-    
-    // MARK: - Config
-    
-    private func loadConfig() {
-        config = SettingsWindow.loadConfig()
     }
     
     // MARK: - Menu Bar
@@ -153,12 +161,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     
     func settingsDidChange() {
         log("Settings changed, reloading...")
-        loadConfig()
         hotkeyManager?.stop()
         setupHotkey()
         setupEngines()
         if overlayPanel.currentOnboardingStep != nil {
-            let hotkeyType = config["hotkey"] as? String ?? "fn"
+            let hotkeyType = UserDefaults.standard.string(forKey: SettingsKey.hotkey) ?? "fn"
             overlayPanel.setHotkeyLabel(hotkeyType == "option" ? "option" : "fn")
         }
     }
@@ -182,7 +189,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     // MARK: - Hotkey
     
     private func setupHotkey() {
-        let hotkeyType = config["hotkey"] as? String ?? "fn"
+        let hotkeyType = UserDefaults.standard.string(forKey: SettingsKey.hotkey) ?? "fn"
         let mask: UInt64 = hotkeyType == "option" ? CGEventFlags.maskAlternate.rawValue : 0x00800000
         
         hotkeyManager = HotkeyManager(
@@ -201,15 +208,14 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     // MARK: - Engine Setup
     
     private func setupEngines() {
-        let txConfig = config["transcription"] as? [String: Any] ?? [:]
-        let fmtConfig = config["formatting"] as? [String: Any] ?? [:]
-        
+        let d = UserDefaults.standard
+
         // Transcription
-        let txProviderName = txConfig["provider"] as? String ?? "none"
-        let txKey = txConfig["api_key"] as? String ?? ""
-        let txModel = txConfig["model"] as? String
+        let txProviderName = d.string(forKey: SettingsKey.txProvider) ?? "none"
+        let txKey = d.string(forKey: SettingsKey.txApiKey) ?? ""
+        let txModel = d.string(forKey: SettingsKey.txModel)
         let txProvider = TranscriptionProvider.allCases.first { $0.rawValue == txProviderName } ?? .none
-        
+
         if txProvider != .none && !txKey.isEmpty {
             audioTranscriber = AudioTranscriber(provider: txProvider, apiKey: txKey, model: txModel?.isEmpty == true ? nil : txModel)
             log("Transcription: \(txProvider.rawValue)")
@@ -217,20 +223,20 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             audioTranscriber = nil
             log("Transcription: Apple Speech")
         }
-        
+
         // Formatting
-        let fmtProviderName = fmtConfig["provider"] as? String ?? "none"
-        let fmtStyleName = fmtConfig["style"] as? String ?? "formatted"
-        let fmtModel = fmtConfig["model"] as? String
+        let fmtProviderName = d.string(forKey: SettingsKey.fmtProvider) ?? "none"
+        let fmtStyleName = d.string(forKey: SettingsKey.fmtStyle) ?? "formatted"
+        let fmtModel = d.string(forKey: SettingsKey.fmtModel)
         let fmtProvider = FormattingProvider.allCases.first { $0.rawValue == fmtProviderName } ?? .none
         formattingStyle = FormattingStyle.allCases.first { $0.rawValue == fmtStyleName } ?? .formatted
-        
+
         // Resolve formatting API key: use its own, or fall back to transcription key if same provider
-        var fmtKey = fmtConfig["api_key"] as? String ?? ""
+        var fmtKey = d.string(forKey: SettingsKey.fmtApiKey) ?? ""
         if fmtKey.isEmpty && fmtProviderName == txProviderName {
             fmtKey = txKey
         }
-        
+
         if fmtProvider != .none && !fmtKey.isEmpty {
             textFormatter = TextFormatter(provider: fmtProvider, apiKey: fmtKey, model: fmtModel?.isEmpty == true ? nil : fmtModel, style: formattingStyle)
             log("Formatting: \(fmtProvider.rawValue) / \(formattingStyle.rawValue)")
@@ -243,38 +249,77 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     // MARK: - Onboarding
 
     private func startOnboardingIfNeeded() {
-        guard !UserDefaults.standard.bool(forKey: "onboardingComplete") else { return }
-        let hotkeyType = config["hotkey"] as? String ?? "fn"
+        guard !UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) else { return }
+        let hotkeyType = UserDefaults.standard.string(forKey: SettingsKey.hotkey) ?? "fn"
         overlayPanel.setHotkeyLabel(hotkeyType == "option" ? "option" : "fn")
-        overlayPanel.advanceOnboarding(to: .dictatePrompt)
+        overlayPanel.advanceOnboarding(to: .tryIt)
     }
 
-    private func onFirstDictation() {
-        guard overlayPanel.currentOnboardingStep == .dictatePrompt else { return }
-
-        let txConfig = config["transcription"] as? [String: Any] ?? [:]
-        let txKey = txConfig["api_key"] as? String ?? ""
-
-        if txKey.isEmpty {
-            overlayPanel.advanceOnboarding(to: .apiKeyPrompt)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
-                self?.finalizeOnboarding()
-            }
-        } else {
+    private func advanceOnboardingStep() {
+        let step = overlayPanel.currentOnboardingStep
+        log("Advancing onboarding from: \(String(describing: step))")
+        switch step {
+        case .success:
+            overlayPanel.advanceOnboarding(to: .apiTip)
+        case .apiTip:
+            overlayPanel.advanceOnboarding(to: .formattingTip)
+        case .formattingTip:
+            overlayPanel.advanceOnboarding(to: .welcome)
+        case .welcome:
+            finalizeOnboarding()
+        default:
             finalizeOnboarding()
         }
     }
 
     private func finalizeOnboarding() {
-        guard !UserDefaults.standard.bool(forKey: "onboardingComplete") else { return }
-        UserDefaults.standard.set(true, forKey: "onboardingComplete")
+        UserDefaults.standard.set(true, forKey: SettingsKey.onboardingComplete)
         overlayPanel.completeOnboarding()
+        log("Onboarding finalized")
     }
 
     // MARK: - Recording Flow
     
     private func startRecording() {
         log("Key down — starting recording")
+
+        // Hold-to-confirm only for actual onboarding confirmation screens
+        if let step = overlayPanel.currentOnboardingStep {
+            switch step {
+            case .success, .apiTip, .formattingTip, .welcome:
+                log("Hold-to-confirm for: \(step)")
+                overlayPanel.pressDown()
+                let workItem = DispatchWorkItem { [weak self] in
+                    guard let self else { return }
+                    self.onboardingHoldWork = nil
+                    self.overlayPanel.pressRelease()
+                    self.playSound("Pop")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+                        self?.advanceOnboardingStep()
+                    }
+                }
+                onboardingHoldWork = workItem
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: workItem)
+                return
+            default:
+                break // .tryIt, .speakTip, .holdTip — fall through to start recording
+            }
+        }
+
+        // Cancel any pending tip/error dismiss timers
+        tipDismissWork?.cancel()
+        tipDismissWork = nil
+
+        // Clear transient tip steps so the UI resets cleanly
+        if let step = overlayPanel.currentOnboardingStep {
+            switch step {
+            case .speakTip, .holdTip:
+                overlayPanel.advanceOnboarding(to: .tryIt)
+            default:
+                break
+            }
+        }
+
         guard isEnabled, state == .idle else {
             log("Skipped: enabled=\(isEnabled) state=\(state)")
             return
@@ -299,9 +344,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             try audioRecorder.start()
             // Delay chime so hardware has settled after engine.start()
             let workItem = DispatchWorkItem { [weak self] in
-                let sound = NSSound(named: "Blow")
-                self?.chimeSound = sound
-                sound?.play()
+                self?.playSound("Blow")
             }
             chimeWorkItem = workItem
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
@@ -310,11 +353,22 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             state = .idle
             updateIcon(.idle)
             overlayPanel.dismiss()
+            restoreOnboardingIfNeeded()
         }
     }
     
     private func stopAndTranscribe() {
         log("Key up — stopping recording")
+
+        // Handle onboarding hold-to-confirm (released too early)
+        if let work = onboardingHoldWork {
+            work.cancel()
+            onboardingHoldWork = nil
+            overlayPanel.pressRelease()
+            overlayPanel.shake()
+            return
+        }
+
         guard state == .recording else { return }
         
         let duration = Date().timeIntervalSince(recordingStart ?? Date())
@@ -328,25 +382,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                 guard let self, self.state == .recording else { return }
                 self.audioRecorder.cancel()
                 self.chimeWorkItem = nil
-                self.chimeSound = nil
-                NSSound(named: "Pop")?.play()
+                self.playSound("Pop")
                 self.showTip(.holdTip)
             }
             return
         }
 
         chimeWorkItem = nil
-        chimeSound = nil
-        
+
         state = .processing
         updateIcon(.processing)
         overlayPanel.showProcessing()
-        NSSound(named: "Pop")?.play()
-        
+
         guard let audioURL = audioRecorder.stop() else {
+            playSound("Pop")
             finishProcessing()
             return
         }
+        playSound("Pop")
         
         // Silence check — levels are RMS * 5, so 0.15 ≈ actual quiet speech threshold
         if peakAudioLevel < 0.15 {
@@ -489,17 +542,24 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         updateIcon(.idle)
         overlayPanel.showNoSpeech()
         overlayPanel.advanceOnboarding(to: step)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+        tipDismissWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard self?.overlayPanel.currentOnboardingStep == step else { return }
             self?.overlayPanel.dismiss()
-            self?.overlayPanel.completeOnboarding()
+            self?.restoreOnboardingIfNeeded()
+            if UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) {
+                self?.overlayPanel.completeOnboarding()
+            }
         }
+        tipDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
     }
 
     private func pasteText(_ text: String) {
         pasteManager.paste(text)
-        if !UserDefaults.standard.bool(forKey: "onboardingComplete") {
-            onFirstDictation()
+        if overlayPanel.currentOnboardingStep == .tryIt {
+            overlayPanel.advanceOnboarding(to: .success(text))
+            playSound("Submarine")
         }
     }
 
@@ -507,6 +567,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         state = .idle
         updateIcon(.idle)
         overlayPanel.dismiss()
+        restoreOnboardingIfNeeded()
+    }
+
+    private func restoreOnboardingIfNeeded() {
+        guard !UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) else { return }
+        let step = overlayPanel.currentOnboardingStep
+        // Only restore if we're currently in an onboarding step that should bounce back to tryIt
+        // If step is nil, onboarding hasn't started or was completed — don't restart it
+        if step == .tryIt || step == .speakTip || step == .holdTip {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.overlayPanel.advanceOnboarding(to: .tryIt)
+            }
+        }
     }
     
     private func showNotification(title: String, body: String) {
@@ -550,5 +623,12 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         }
         
         overlayPanel.showError(message)
+        // After error auto-dismisses (2s), restore onboarding
+        tipDismissWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.restoreOnboardingIfNeeded()
+        }
+        tipDismissWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5, execute: work)
     }
 }
