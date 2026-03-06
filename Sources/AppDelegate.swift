@@ -299,8 +299,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                             self?.maybeFormat(text)
                         case .failure(let error):
                             log("❌ Transcription failed: \(error)")
-                            self?.showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
-                            self?.finishProcessing()
+                            self?.showError(error)
                         }
                     }
                 }
@@ -315,8 +314,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                         self?.maybeFormat(text)
                     case .failure(let error):
                         log("❌ Apple Speech failed: \(error)")
-                        self?.showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
-                        self?.finishProcessing()
+                        self?.showError(error)
                     }
                 }
             }
@@ -361,11 +359,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             if !trimmed.isEmpty {
                 pasteManager.paste(trimmed)
             }
+            finishProcessing()
         case .failure(let error):
             log("❌ Failed: \(error)")
-            showNotification(title: "VoiceType", body: "Failed: \(error.localizedDescription)")
+            showError(error)
         }
-        finishProcessing()
     }
     
     private func finishProcessing() {
@@ -374,12 +372,37 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         overlayPanel.dismiss()
     }
     
-    // MARK: - Helpers
-    
-    private func showNotification(title: String, body: String) {
-        let notification = NSUserNotification()
-        notification.title = title
-        notification.informativeText = body
-        NSUserNotificationCenter.default.deliver(notification)
+    /// Show a brief error message in the overlay pill, then auto-dismiss
+    private func showError(_ error: Error) {
+        state = .idle
+        updateIcon(.idle)
+        
+        // Build a short user-friendly message
+        let message: String
+        if let fmtError = error as? FormatterError {
+            switch fmtError {
+            case .apiError(let msg):
+                if msg.contains("quota") || msg.contains("rate") || msg.contains("429") {
+                    message = "Rate limited — try again"
+                } else if msg.contains("auth") || msg.contains("key") || msg.contains("401") || msg.contains("403") {
+                    message = "Invalid API key"
+                } else {
+                    message = "API error"
+                }
+            default:
+                message = fmtError.localizedDescription ?? "Something went wrong"
+            }
+        } else {
+            let desc = error.localizedDescription
+            if desc.contains("timed out") || desc.contains("timeout") {
+                message = "Request timed out"
+            } else if desc.contains("offline") || desc.contains("network") || desc.contains("Internet") {
+                message = "No internet connection"
+            } else {
+                message = "Something went wrong"
+            }
+        }
+        
+        overlayPanel.showError(message)
     }
 }

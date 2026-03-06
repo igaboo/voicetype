@@ -10,8 +10,7 @@ class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
     
     init() {
-        // Make window larger than the pill — extra padding absorbs any window chrome
-        let width: CGFloat = 160
+        let width: CGFloat = 320
         let height: CGFloat = 80
         
         let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
@@ -62,6 +61,14 @@ class OverlayPanel: NSPanel {
         overlayState.audioLevel = 0
     }
     
+    func showError(_ message: String) {
+        overlayState.mode = .error(message)
+        // Auto-dismiss after 2 seconds
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+            self?.dismiss()
+        }
+    }
+    
     func dismiss() {
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
@@ -76,7 +83,7 @@ class OverlayPanel: NSPanel {
 // MARK: - State
 
 enum OverlayMode: Equatable {
-    case idle, recording, processing
+    case idle, recording, processing, error(String)
 }
 
 class OverlayState: ObservableObject {
@@ -106,19 +113,27 @@ struct OverlayView: View {
     
     @ViewBuilder
     private var pillContent: some View {
-        // Fixed-size container so the pill never changes size
-        ZStack {
-            // Waveform bars — visible when recording, hidden when processing
-            WaveformBars(level: state.mode == .recording ? CGFloat(state.audioLevel) : 0)
-                .opacity(state.mode == .recording ? 1 : 0)
-            
-            // Spinner — fades in when processing
+        switch state.mode {
+        case .recording:
+            WaveformBars(level: CGFloat(state.audioLevel))
+                .frame(width: 40, height: 24)
+        case .processing:
             ProgressView()
                 .scaleEffect(0.6)
-                .opacity(state.mode == .processing ? 1 : 0)
+                .frame(width: 40, height: 24)
+        case .error(let message):
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundColor(.red)
+                    .font(.system(size: 12))
+                Text(message)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(.primary)
+                    .lineLimit(1)
+            }
+        case .idle:
+            EmptyView()
         }
-        .frame(width: 40, height: 24)
-        .animation(.easeInOut(duration: 0.25), value: state.mode)
     }
 }
 
