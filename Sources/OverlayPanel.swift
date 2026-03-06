@@ -158,28 +158,32 @@ struct AudioReactiveBars: View {
     var bandLevels: [Float]
     let barCount: Int
     
-    // Position scaling — center emphasis but edges still visible
+    // Position scaling — center emphasis, edges still move
     private let positionScale: [CGFloat] = [0.35, 0.45, 0.6, 0.78, 0.92, 1.0, 0.94, 0.8, 0.63, 0.48, 0.38]
     
     var body: some View {
         HStack(spacing: 2) {
             ForEach(0..<barCount, id: \.self) { index in
                 let bandLevel = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
+                // FFT variation: offset each bar's level by its band data
+                let bandOffset = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
+                // Blend: 70% overall volume + 30% per-band FFT variation
+                let overall = bandLevels.isEmpty ? bandLevel : CGFloat(bandLevels.reduce(Float(0), +) / Float(bandLevels.count))
+                let blended = overall * 0.7 + bandOffset * 0.3
+                
                 let scale = positionScale[index]
                 
                 let minH: CGFloat = 5
                 let maxH: CGFloat = 28
-                // Center bars can reach full max, edges capped much lower
                 let barCeiling = minH + (maxH - minH) * scale
                 
-                // Power curve so bars spring up dramatically
-                let driven = pow(bandLevel, 0.7)
+                let driven = pow(blended, 0.6)
                 let barHeight = max(minH, min(barCeiling, minH + (barCeiling - minH) * driven))
                 
                 RoundedRectangle(cornerRadius: 1.5)
                     .fill(Color.white.opacity(0.9))
                     .frame(width: 3, height: barHeight)
-                    .animation(.easeOut(duration: 0.1), value: bandLevel)
+                    .animation(.easeOut(duration: 0.1), value: blended)
             }
         }
     }
