@@ -127,9 +127,6 @@ class AudioRecorder {
         let logMin = log2(minFreq)
         let logMax = log2(maxFreq)
         
-        // Per-band boost — lower bands get extra gain since voice fundamental is there
-        let bandBoosts: [Float] = [1.8, 1.5, 1.3, 1.1, 1.0, 0.9]
-        
         var bands = [Float](repeating: 0, count: rawBandCount)
         for i in 0..<rawBandCount {
             let freqLow = pow(2.0, logMin + (logMax - logMin) * Float(i) / Float(rawBandCount))
@@ -140,10 +137,16 @@ class AudioRecorder {
             if binHigh >= binLow {
                 var sum: Float = 0
                 for b in binLow...binHigh { sum += magnitudes[b] }
-                let avg = sum / Float(binHigh - binLow + 1)
-                let db = 10 * log10(max(avg, 1e-10))
-                let boost = i < bandBoosts.count ? bandBoosts[i] : 1.0
-                bands[i] = min(1.0, max(0.0, (db + 50) / 35 * boost))
+                bands[i] = sum / Float(binHigh - binLow + 1)
+            }
+        }
+        
+        // Normalize relative to the loudest band so they spread across the full range
+        let peak = bands.max() ?? 1
+        if peak > 0 {
+            for i in 0..<rawBandCount {
+                // Square root scaling for perceptual balance
+                bands[i] = sqrt(bands[i] / peak)
             }
         }
         
