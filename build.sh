@@ -5,22 +5,18 @@ APP_NAME="Yap"
 BUILD_DIR="build"
 APP_BUNDLE="$BUILD_DIR/$APP_NAME.app"
 
-echo "🔨 Building $APP_NAME..."
+echo "Building $APP_NAME..."
 
-# Clean previous build
+# Clean previous app bundle
 rm -rf "$BUILD_DIR"
 mkdir -p "$APP_BUNDLE/Contents/MacOS"
 mkdir -p "$APP_BUNDLE/Contents/Resources"
 
-# Compile all Swift sources
-swiftc \
-    -o "$APP_BUNDLE/Contents/MacOS/$APP_NAME" \
-    Sources/*.swift \
-    -framework Cocoa \
-    -framework AVFoundation \
-    -framework Speech \
-    -O \
-    -suppress-warnings
+# Build with Swift Package Manager (incremental)
+swift build -c release --quiet 2>&1 | grep -v "warning:" || true
+
+# Copy binary into app bundle
+cp .build/release/Yap "$APP_BUNDLE/Contents/MacOS/$APP_NAME"
 
 # Copy Info.plist
 cp Resources/Info.plist "$APP_BUNDLE/Contents/"
@@ -47,14 +43,14 @@ if [ -f Resources/AppIcon.png ]; then
     sips -z 1024 1024 Resources/AppIcon.png --out "$ICONSET/icon_512x512@2x.png" > /dev/null 2>&1
     iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/AppIcon.icns"
     rm -rf "$ICONSET"
-    echo "🎨 App icon generated"
+    echo "App icon generated"
 fi
 
 # Ad-hoc code sign
 codesign --force --sign - "$APP_BUNDLE"
 
 echo ""
-echo "✅ Built: $APP_BUNDLE"
+echo "Built: $APP_BUNDLE"
 echo ""
 echo "To install:"
 echo "  cp -r $APP_BUNDLE /Applications/"
@@ -63,4 +59,4 @@ echo "To run:"
 echo "  open /Applications/$APP_NAME.app"
 echo ""
 echo "First run: grant Microphone, Speech Recognition, and Accessibility"
-echo "in System Settings → Privacy & Security."
+echo "in System Settings > Privacy & Security."
