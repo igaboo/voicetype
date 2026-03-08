@@ -1,10 +1,23 @@
 import Cocoa
 import SwiftUI
 
-/// NSHostingView subclass that accepts the first mouse click even when the window isn't key.
-/// Fixes the "double-click to activate" issue on NSPanel.
-class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
+/// NSView subclass that receives first-click and forwards to a callback.
+class ClickTargetView: NSView {
+    var onClick: (() -> Void)?
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+    override func mouseDown(with event: NSEvent) { onClick?() }
+}
+
+/// Content view that passes clicks through except on ClickTargetViews.
+class OverlayContentView: NSView {
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        for subview in subviews.reversed() {
+            guard subview is ClickTargetView else { continue }
+            let local = convert(point, to: subview)
+            if subview.bounds.contains(local) { return subview }
+        }
+        return nil
+    }
 }
 
 /// A floating pill-shaped overlay at the bottom of the screen
@@ -12,8 +25,10 @@ class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
 class OverlayPanel: NSPanel {
     private let overlayState = OverlayState()
     private var errorDismissWork: DispatchWorkItem?
+    private var pauseTarget: ClickTargetView?
+    private var stopTarget: ClickTargetView?
 
-    override var canBecomeKey: Bool { overlayState.isHandsFree }
+    override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
     init() {
@@ -38,13 +53,28 @@ class OverlayPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
-        ignoresMouseEvents = true // clicks pass through entirely
 
-        let hostingView = ClickThroughHostingView(rootView:
+        let container = OverlayContentView(frame: NSRect(x: 0, y: 0, width: width, height: height))
+
+        let hostingView = NSHostingView(rootView:
             OverlayView(state: overlayState)
                 .frame(width: width, height: height)
         )
-        contentView = hostingView
+        hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
+        container.addSubview(hostingView)
+
+        // Click targets sit above the hosting view; frames set by updateButtonTargets()
+        let pause = ClickTargetView(frame: .zero)
+        pause.onClick = { [weak self] in self?.overlayState.onPauseResume?() }
+        container.addSubview(pause)
+        pauseTarget = pause
+
+        let stop = ClickTargetView(frame: .zero)
+        stop.onClick = { [weak self] in self?.overlayState.onStop?() }
+        container.addSubview(stop)
+        stopTarget = stop
+
+        contentView = container
     }
     
     func showRecording() {
@@ -63,8 +93,8 @@ class OverlayPanel: NSPanel {
         overlayState.onStop = onStop
         overlayState.isPaused = false
         overlayState.onboardingStep = nil
-        ignoresMouseEvents = false
         overlayState.isHandsFree = true
+        updateButtonTargets()
     }
 
     func setHandsFreePaused(_ paused: Bool) {
@@ -75,6 +105,32 @@ class OverlayPanel: NSPanel {
 
     func updateLevel(_ level: Float) {
         overlayState.audioLevel = level
+        updateButtonTargets()
+    }
+
+    /// Reposition click targets to match the current pill scale so hits track visible buttons.
+    private func updateButtonTargets() {
+        guard let pause = pauseTarget, let stop = stopTarget else { return }
+        let cx = frame.width / 2   // 700 — horizontal center of 1400pt panel
+        let cy: CGFloat = 415      // pill center Y in panel coords (45pt above screen bottom)
+
+        // Mirror audioBounceFactor from OverlayView
+        let scale: CGFloat
+        if overlayState.mode == .recording && !overlayState.isPaused {
+            let lvl = min(CGFloat(overlayState.audioLevel), 1.0)
+            scale = 1.0 + pow(lvl, 1.5) * 0.25
+        } else {
+            scale = 1.0
+        }
+
+        let targetRadius: CGFloat = 13 * scale + 4 // button radius * scale + touch padding
+        let pauseCX = cx - 49 * scale
+        let stopCX  = cx + 49 * scale
+
+        pause.frame = NSRect(x: pauseCX - targetRadius, y: cy - targetRadius,
+                             width: targetRadius * 2, height: targetRadius * 2)
+        stop.frame  = NSRect(x: stopCX - targetRadius, y: cy - targetRadius,
+                             width: targetRadius * 2, height: targetRadius * 2)
     }
 
     func updateBandLevels(_ levels: [Float]) {
@@ -83,7 +139,6 @@ class OverlayPanel: NSPanel {
 
     /// Contract the hands-free UI (buttons fly back, pill shrinks) without changing mode.
     func contractHandsFree() {
-        ignoresMouseEvents = true
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -91,7 +146,6 @@ class OverlayPanel: NSPanel {
     }
 
     func showProcessing() {
-        ignoresMouseEvents = true
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -110,7 +164,6 @@ class OverlayPanel: NSPanel {
     }
 
     func dismiss() {
-        ignoresMouseEvents = true
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -125,7 +178,6 @@ class OverlayPanel: NSPanel {
     }
 
     func advanceOnboarding(to step: OnboardingStep) {
-        ignoresMouseEvents = true
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.5)) {
             overlayState.onboardingStep = step
         }
@@ -159,7 +211,6 @@ class OverlayPanel: NSPanel {
     }
 
     func completeOnboarding() {
-        ignoresMouseEvents = true
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
             overlayState.onboardingStep = nil
         }
@@ -242,6 +293,7 @@ struct OverlayView: View {
         ZStack {
             if isExpanded {
                 LavaLampBackground(energy: gradientEnergy)
+                    .allowsHitTesting(false)
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.8), value: gradientEnergy)
             }
