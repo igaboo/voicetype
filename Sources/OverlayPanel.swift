@@ -35,6 +35,10 @@ class OverlayPanel: NSPanel {
     private var pauseTarget: ClickTargetView?
     private var stopTarget: ClickTargetView?
     private var contentOverlay: OverlayContentView?
+    private var handsFreeTimer: Timer?
+    private var handsFreeTimerStart: Date?
+    private var handsFreeAccumulated: TimeInterval = 0
+    private let handsFreeTimerThreshold: TimeInterval = 60
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -138,9 +142,11 @@ class OverlayPanel: NSPanel {
         overlayState.isPaused = false
         overlayState.isHandsFree = true
         updateButtonTargets()
+        startHandsFreeTimer()
     }
 
     func setHandsFreePaused(_ paused: Bool) {
+        if paused { pauseHandsFreeTimer() } else { resumeHandsFreeTimer() }
         withAnimation(.easeInOut(duration: 0.2)) {
             overlayState.isPaused = paused
         }
@@ -200,6 +206,7 @@ class OverlayPanel: NSPanel {
 
     /// Contract the hands-free UI (buttons fly back, pill shrinks) without changing mode.
     func contractHandsFree() {
+        stopHandsFreeTimer()
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -207,6 +214,7 @@ class OverlayPanel: NSPanel {
     }
 
     func showProcessing() {
+        stopHandsFreeTimer()
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -227,6 +235,7 @@ class OverlayPanel: NSPanel {
     }
 
     func dismiss() {
+        stopHandsFreeTimer()
         overlayState.isHandsFree = false
         overlayState.isPaused = false
         overlayState.onPauseResume = nil
@@ -316,6 +325,42 @@ class OverlayPanel: NSPanel {
         }
     }
 
+    private func startHandsFreeTimer() {
+        handsFreeAccumulated = 0
+        handsFreeTimerStart = Date()
+        overlayState.handsFreeElapsed = 0
+        handsFreeTimer?.invalidate()
+        handsFreeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, let start = self.handsFreeTimerStart else { return }
+            self.overlayState.handsFreeElapsed = self.handsFreeAccumulated + Date().timeIntervalSince(start)
+        }
+    }
+
+    private func pauseHandsFreeTimer() {
+        guard let start = handsFreeTimerStart else { return }
+        handsFreeAccumulated += Date().timeIntervalSince(start)
+        handsFreeTimerStart = nil
+        handsFreeTimer?.invalidate()
+        handsFreeTimer = nil
+    }
+
+    private func resumeHandsFreeTimer() {
+        handsFreeTimerStart = Date()
+        handsFreeTimer?.invalidate()
+        handsFreeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, let start = self.handsFreeTimerStart else { return }
+            self.overlayState.handsFreeElapsed = self.handsFreeAccumulated + Date().timeIntervalSince(start)
+        }
+    }
+
+    private func stopHandsFreeTimer() {
+        handsFreeTimer?.invalidate()
+        handsFreeTimer = nil
+        handsFreeTimerStart = nil
+        handsFreeAccumulated = 0
+        overlayState.handsFreeElapsed = 0
+    }
+
 }
 
 // MARK: - State
@@ -363,6 +408,7 @@ class OverlayState: ObservableObject {
     @Published var isHovering: Bool = false
     @Published var gradientEnabled: Bool = true
     @Published var alwaysVisible: Bool = true
+    @Published var handsFreeElapsed: TimeInterval = 0
     var onPauseResume: (() -> Void)?
     var onStop: (() -> Void)?
     var onClickToRecord: (() -> Void)?
@@ -475,9 +521,17 @@ struct OverlayView: View {
                             .transition(.opacity.combined(with: .offset(y: 4)))
                     }
                 }
+                if state.isHandsFree && state.handsFreeElapsed >= 60 {
+                    Text(formatHandsFreeElapsed(state.handsFreeElapsed))
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .fixedSize()
+                        .transition(.opacity.combined(with: .offset(y: -4)))
+                }
                 } // end inner VStack
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.onboardingStep)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.mode)
+                .animation(.easeOut(duration: 0.3), value: state.handsFreeElapsed >= 60)
 
                 Spacer()
                     .frame(height: 415)
@@ -505,6 +559,11 @@ struct OverlayView: View {
     private var pillScale: CGFloat {
         if isExpanded { return 1.0 }
         return state.isHovering ? 0.65 : 0.5
+    }
+
+    private func formatHandsFreeElapsed(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds)
+        return "\(s / 60):\(String(format: "%02d", s % 60))"
     }
 
     private var showHoldPromptInPill: Bool {
