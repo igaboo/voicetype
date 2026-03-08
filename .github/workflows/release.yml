@@ -16,10 +16,14 @@ jobs:
       - name: Build Yap.app
         run: ./build.sh
 
-      - name: Zip app bundle
-        run: cd build && zip -r Yap.app.zip Yap.app
+      - name: Create DMG
+        run: |
+          mkdir -p /tmp/yap-dmg
+          cp -r build/Yap.app /tmp/yap-dmg/
+          ln -s /Applications /tmp/yap-dmg/Applications
+          hdiutil create -volname "Yap" -srcfolder /tmp/yap-dmg -ov -format UDZO -o build/Yap.dmg
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/Yap.app.zip
+          files: build/Yap.dmg
