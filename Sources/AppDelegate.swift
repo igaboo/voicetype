@@ -20,7 +20,7 @@ func log(_ message: String) {
 }
 
 enum AppState {
-    case idle, recording, processing
+    case idle, recording, handsFreeRecording, handsFreePaused, processing
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
@@ -36,6 +36,8 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     private var isEnabled = true
     private var enableMenuItem: NSMenuItem!
     private var peakAudioLevel: Float = 0
+    private var handsFreeEntryTime: Date?
+    private var shortTapCleanupWork: DispatchWorkItem?
     private var chimeWorkItem: DispatchWorkItem?
     private var onboardingHoldWork: DispatchWorkItem?
     private var soundPlayers: [String: AVAudioPlayer] = [:]
@@ -113,7 +115,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             } else {
                 button.image = NSImage(systemSymbolName: "mic", accessibilityDescription: "Yap")
             }
-        case .recording:
+        case .recording, .handsFreeRecording, .handsFreePaused:
             button.image = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: "Yap")
         case .processing:
             button.image = NSImage(systemSymbolName: "ellipsis.circle", accessibilityDescription: "Yap")
@@ -197,6 +199,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             onKeyDown: { [weak self] in self?.startRecording() },
             onKeyUp: { [weak self] in self?.stopAndTranscribe() }
         )
+        hotkeyManager.onDoubleTap = { [weak self] in self?.startHandsFreeRecording() }
         
         let started = hotkeyManager.start()
         log("Hotkey (\(hotkeyType)): \(started ? "✅" : "❌ — no Accessibility?")")
@@ -314,7 +317,11 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         if let step = overlayPanel.currentOnboardingStep {
             switch step {
             case .speakTip, .holdTip:
-                overlayPanel.advanceOnboarding(to: .tryIt)
+                if UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) {
+                    overlayPanel.completeOnboarding()
+                } else {
+                    overlayPanel.advanceOnboarding(to: .tryIt)
+                }
             default:
                 break
             }
@@ -369,22 +376,35 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             return
         }
 
+        // In hands-free mode, fn release stops recording (ignore the entry release)
+        if state == .handsFreeRecording || state == .handsFreePaused {
+            if let entry = handsFreeEntryTime, Date().timeIntervalSince(entry) < 0.5 {
+                handsFreeEntryTime = nil
+                return
+            }
+            stopHandsFreeRecording()
+            return
+        }
+
         guard state == .recording else { return }
-        
+
         let duration = Date().timeIntervalSince(recordingStart ?? Date())
         log("Duration: \(String(format: "%.1f", duration))s, peak: \(peakAudioLevel)")
-        
+
         // Too short = accidental tap
         guard duration >= 1.2 else {
             // Keep pill expanded and mic running for a smooth minimum duration
             let remaining = max(0.5, 1.0 - duration)
-            DispatchQueue.main.asyncAfter(deadline: .now() + remaining) { [weak self] in
+            let work = DispatchWorkItem { [weak self] in
                 guard let self, self.state == .recording else { return }
+                self.shortTapCleanupWork = nil
                 self.audioRecorder.cancel()
                 self.chimeWorkItem = nil
                 self.playSound("Pop")
                 self.showTip(.holdTip)
             }
+            shortTapCleanupWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + remaining, execute: work)
             return
         }
 
@@ -400,14 +420,19 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             return
         }
         playSound("Pop")
-        
+
+        processRecordedAudio(audioURL: audioURL)
+    }
+
+    /// Shared audio processing pipeline used by both hold-to-record and hands-free modes
+    private func processRecordedAudio(audioURL: URL) {
         // Silence check — levels are RMS * 5, so 0.15 ≈ actual quiet speech threshold
         if peakAudioLevel < 0.15 {
             log("Silence detected (peak \(peakAudioLevel)) — skipping")
             showTip(.speakTip)
             return
         }
-        
+
         // Determine flow based on configured engines
         if let apiTranscriber = audioTranscriber {
             // Quick Apple Speech pre-check: if no words detected, skip API call
@@ -420,13 +445,13 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                     } else {
                         hasSpeech = false
                     }
-                    
+
                     guard hasSpeech else {
                         log("Pre-check: no speech detected — skipping API call")
                         self?.showTip(.speakTip)
                         return
                     }
-                    
+
                     log("Pre-check: speech detected, proceeding with API")
                     self?.sendToAPI(apiTranscriber: apiTranscriber, audioURL: audioURL)
                 }
@@ -568,6 +593,78 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         updateIcon(.idle)
         overlayPanel.dismiss()
         restoreOnboardingIfNeeded()
+    }
+
+    // MARK: - Hands-Free Recording
+
+    private func startHandsFreeRecording() {
+        log("Double-tap — entering hands-free mode")
+
+        // Cancel pending short-tap cleanup from the first tap
+        shortTapCleanupWork?.cancel()
+        shortTapCleanupWork = nil
+
+        // Must already be recording (from the first tap's onKeyDown)
+        guard state == .recording else { return }
+
+        // Don't allow hands-free during onboarding
+        guard UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) else { return }
+
+        state = .handsFreeRecording
+        handsFreeEntryTime = Date()
+
+        overlayPanel.showHandsFreeRecording(
+            onPauseResume: { [weak self] in self?.toggleHandsFreePause() },
+            onStop: { [weak self] in self?.stopHandsFreeRecording() }
+        )
+    }
+
+    private func toggleHandsFreePause() {
+        if state == .handsFreeRecording {
+            audioRecorder.pause()
+            state = .handsFreePaused
+            overlayPanel.setHandsFreePaused(true)
+            log("Hands-free: paused")
+        } else if state == .handsFreePaused {
+            audioRecorder.resume()
+            state = .handsFreeRecording
+            overlayPanel.setHandsFreePaused(false)
+            log("Hands-free: resumed")
+        }
+    }
+
+    private func stopHandsFreeRecording() {
+        guard state == .handsFreeRecording || state == .handsFreePaused else { return }
+        log("Hands-free: stopping")
+
+        chimeWorkItem = nil
+
+        guard let audioURL = audioRecorder.stop() else {
+            playSound("Pop")
+            state = .idle
+            updateIcon(.idle)
+            overlayPanel.contractHandsFree()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.overlayPanel.dismiss()
+            }
+            return
+        }
+        playSound("Pop")
+
+        // Check silence before committing to processing UI
+        if peakAudioLevel < 0.15 {
+            log("Silence detected (peak \(peakAudioLevel)) — skipping")
+            overlayPanel.contractHandsFree()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.showTip(.speakTip)
+            }
+            return
+        }
+
+        state = .processing
+        updateIcon(.processing)
+        overlayPanel.showProcessing()
+        processRecordedAudio(audioURL: audioURL)
     }
 
     private func restoreOnboardingIfNeeded() {

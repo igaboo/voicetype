@@ -1,15 +1,21 @@
 import Cocoa
 import SwiftUI
 
+/// NSHostingView subclass that accepts the first mouse click even when the window isn't key.
+/// Fixes the "double-click to activate" issue on NSPanel.
+class ClickThroughHostingView<Content: View>: NSHostingView<Content> {
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+}
+
 /// A floating pill-shaped overlay at the bottom of the screen
 /// with audio-reactive waveform bars and a processing spinner.
 class OverlayPanel: NSPanel {
     private let overlayState = OverlayState()
     private var errorDismissWork: DispatchWorkItem?
 
-    override var canBecomeKey: Bool { false }
+    override var canBecomeKey: Bool { overlayState.isHandsFree }
     override var canBecomeMain: Bool { false }
-    
+
     init() {
         let width: CGFloat = 1400
         let height: CGFloat = 700
@@ -17,14 +23,14 @@ class OverlayPanel: NSPanel {
         let screenFrame = NSScreen.main?.frame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let x = screenFrame.midX - width / 2
         let y = screenFrame.minY + 330 - height
-        
+
         super.init(
             contentRect: NSRect(x: x, y: y, width: width, height: height),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
-        
+
         level = .floating
         isOpaque = false
         backgroundColor = .clear
@@ -33,8 +39,8 @@ class OverlayPanel: NSPanel {
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
         ignoresMouseEvents = true // clicks pass through entirely
-        
-        let hostingView = NSHostingView(rootView:
+
+        let hostingView = ClickThroughHostingView(rootView:
             OverlayView(state: overlayState)
                 .frame(width: width, height: height)
         )
@@ -52,6 +58,21 @@ class OverlayPanel: NSPanel {
         }
     }
 
+    func showHandsFreeRecording(onPauseResume: @escaping () -> Void, onStop: @escaping () -> Void) {
+        overlayState.onPauseResume = onPauseResume
+        overlayState.onStop = onStop
+        overlayState.isPaused = false
+        overlayState.onboardingStep = nil
+        ignoresMouseEvents = false
+        overlayState.isHandsFree = true
+    }
+
+    func setHandsFreePaused(_ paused: Bool) {
+        withAnimation(.easeInOut(duration: 0.2)) {
+            overlayState.isPaused = paused
+        }
+    }
+
     func updateLevel(_ level: Float) {
         overlayState.audioLevel = level
     }
@@ -60,7 +81,21 @@ class OverlayPanel: NSPanel {
         overlayState.bandLevels = levels
     }
 
+    /// Contract the hands-free UI (buttons fly back, pill shrinks) without changing mode.
+    func contractHandsFree() {
+        ignoresMouseEvents = true
+        overlayState.isHandsFree = false
+        overlayState.isPaused = false
+        overlayState.onPauseResume = nil
+        overlayState.onStop = nil
+    }
+
     func showProcessing() {
+        ignoresMouseEvents = true
+        overlayState.isHandsFree = false
+        overlayState.isPaused = false
+        overlayState.onPauseResume = nil
+        overlayState.onStop = nil
         overlayState.mode = .processing
     }
 
@@ -75,6 +110,11 @@ class OverlayPanel: NSPanel {
     }
 
     func dismiss() {
+        ignoresMouseEvents = true
+        overlayState.isHandsFree = false
+        overlayState.isPaused = false
+        overlayState.onPauseResume = nil
+        overlayState.onStop = nil
         withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
             overlayState.mode = .idle
         }
@@ -165,6 +205,10 @@ class OverlayState: ObservableObject {
     @Published var hotkeyLabel: String = "fn"
     @Published var shakeToken: UUID = UUID()
     @Published var isPressed: Bool = false
+    @Published var isHandsFree: Bool = false
+    @Published var isPaused: Bool = false
+    var onPauseResume: (() -> Void)?
+    var onStop: (() -> Void)?
     var isOnboarding: Bool { onboardingStep != nil }
 }
 
@@ -214,7 +258,7 @@ struct OverlayView: View {
                 }
                 .fixedSize()
                 .frame(minWidth: 40, minHeight: isExpanded ? 28 : 8)
-                .padding(.horizontal, 12)
+                .padding(.horizontal, state.isHandsFree ? 7 : 12)
                 .padding(.vertical, 6)
                 .background(
                     ZStack {
@@ -229,13 +273,15 @@ struct OverlayView: View {
                     Capsule()
                         .strokeBorder(Color.white.opacity(isExpanded ? 0.3 : 0.35), lineWidth: isExpanded ? 1 : 1.5)
                 )
-                .scaleEffect((isExpanded ? 1.0 : 0.5) * audioBounceFactor * (state.isPressed ? 0.85 : 1.0))
+                .scaleEffect((isExpanded ? 1.0 : 0.5) * audioBounceFactor * (state.isPressed ? 0.85 : 1.0) * (state.mode == .processing ? 0.8 : 1.0))
                 .opacity(state.isPressed ? 0.7 : 1.0)
                 .offset(y: isExpanded ? 0 : 40)
                 .modifier(ShakeEffect(progress: shakeProgress))
                 .animation(.spring(response: 0.25, dampingFraction: 0.45, blendDuration: 0.05), value: state.audioLevel)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.onboardingStep)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.mode)
+                .animation(.spring(response: 0.35, dampingFraction: 0.8), value: state.isHandsFree)
+                .animation(.spring(response: 0.3, dampingFraction: 0.8), value: state.isPaused)
                 .overlay(alignment: .bottom) {
                     if let step = state.onboardingStep,
                        state.mode == .idle || state.mode == .noSpeech {
@@ -282,9 +328,49 @@ struct OverlayView: View {
         } else {
             switch state.mode {
             case .recording, .processing:
-                WaveformBars(level: CGFloat(state.audioLevel), bandLevels: state.bandLevels, isProcessing: state.mode == .processing)
-                    .frame(width: 52, height: 28)
-                    .transition(.opacity)
+                ZStack {
+                    // Single unified bar view — no view swap between recording and processing
+                    BarVisualizer(bandLevels: state.bandLevels, isProcessing: state.mode == .processing)
+                        .frame(width: 52, height: 28)
+                        .opacity(state.isHandsFree && state.isPaused ? 0 : 1)
+
+                    // Paused overlay
+                    if state.isHandsFree && state.isPaused {
+                        HStack(spacing: 2) {
+                            ForEach(0..<11, id: \.self) { _ in
+                                RoundedRectangle(cornerRadius: 1.5)
+                                    .fill(Color.white.opacity(0.25))
+                                    .frame(width: 3, height: 5)
+                            }
+                        }
+                        .frame(width: 52, height: 28)
+                    }
+
+                    // Buttons — always present, visibility controlled by isHandsFree
+                    Image(systemName: state.isPaused ? "play.fill" : "pause.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(.white.opacity(0.9))
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color.white.opacity(0.15)))
+                        .contentShape(Circle())
+                        .onTapGesture { state.onPauseResume?() }
+                        .offset(x: state.isHandsFree ? -49 : 0)
+                        .scaleEffect(state.isHandsFree ? 1 : 0.001)
+                        .opacity(state.isHandsFree ? 1 : 0)
+
+                    Image(systemName: "stop.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(Color.red.opacity(0.85)))
+                        .contentShape(Circle())
+                        .onTapGesture { state.onStop?() }
+                        .offset(x: state.isHandsFree ? 49 : 0)
+                        .scaleEffect(state.isHandsFree ? 1 : 0.001)
+                        .opacity(state.isHandsFree ? 1 : 0)
+                }
+                .frame(width: state.isHandsFree ? 124 : 52, height: 28)
+                .transition(.opacity)
             case .noSpeech:
                 HStack(spacing: 2) {
                     ForEach(0..<11, id: \.self) { _ in
@@ -434,118 +520,88 @@ struct OnboardingCardView: View {
 
 // MARK: - Waveform
 
-struct WaveformBars: View {
-    var level: CGFloat
+// MARK: - Unified bar visualizer (recording + processing in one view)
+struct BarVisualizer: View {
     var bandLevels: [Float]
     var isProcessing: Bool
     let barCount = 11
-    
-    var body: some View {
-        if isProcessing {
-            WaveAnimationBars(lastLevel: level, barCount: barCount)
-        } else {
-            AudioReactiveBars(bandLevels: bandLevels, barCount: barCount)
-        }
-    }
-}
 
-// MARK: - Recording: lightweight, no TimelineView
-struct AudioReactiveBars: View {
-    var bandLevels: [Float]
-    let barCount: Int
-    
     // Position scaling — center emphasis, edges still move
     private let positionScale: [CGFloat] = [0.35, 0.45, 0.6, 0.78, 0.92, 1.0, 0.94, 0.8, 0.63, 0.48, 0.38]
-    
-    var body: some View {
-        HStack(spacing: 2) {
-            ForEach(0..<barCount, id: \.self) { index in
-                let bandLevel = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
-                // FFT variation: offset each bar's level by its band data
-                let bandOffset = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
-                // Blend: 70% overall volume + 30% per-band FFT variation
-                let overall = bandLevels.isEmpty ? bandLevel : CGFloat(bandLevels.reduce(Float(0), +) / Float(bandLevels.count))
-                let blended = overall * 0.7 + bandOffset * 0.3
-                
-                let scale = positionScale[index]
-                
-                let minH: CGFloat = 5
-                let maxH: CGFloat = 28
-                let barCeiling = minH + (maxH - minH) * scale
-                
-                // Scale so bars max out at ~75% volume, clamp at 1.0
-                let scaled = min(blended / 0.75, 1.0)
-                let driven = pow(scaled, 0.6)
-                let barHeight = max(minH, min(barCeiling, minH + (barCeiling - minH) * driven))
-                
-                RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.white.opacity(0.9))
-                    .frame(width: 3, height: barHeight)
-                    .animation(.easeOut(duration: 0.1), value: blended)
-            }
-        }
-    }
-}
 
-// MARK: - Processing: TimelineView for wave animation
-struct WaveAnimationBars: View {
-    let lastLevel: CGFloat
-    let barCount: Int
-    
-    @State private var displayLevel: CGFloat = 1
+    @State private var appeared = false
     @State private var waveStrength: CGFloat = 0
-    @State private var startTime: Date? = nil
-    
+    @State private var audioDecay: CGFloat = 1
+    @State private var waveStart: Date? = nil
+    @State private var wasProcessing = false
+
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let elapsed = startTime.map { timeline.date.timeIntervalSince($0) } ?? 0
-            // Sweep from well off-left to well off-right so the wave
-            // fully exits before looping. With gaussian width 6.0,
-            // need ~5 units of margin for the tail to fully disappear.
+        TimelineView(.animation(paused: !isProcessing)) { timeline in
+            let elapsed = waveStart.map { timeline.date.timeIntervalSince($0) } ?? 0
             let margin = 5.0
             let sweepRange = Double(barCount - 1) + margin * 2
             let t = elapsed.truncatingRemainder(dividingBy: 1.2) / 1.2
             let waveCenter = -margin + t * sweepRange
-            
-            HStack(spacing: 2) {
+
+            HStack(alignment: .center, spacing: 2) {
                 ForEach(0..<barCount, id: \.self) { index in
-                    // Audio-reactive base (decaying via displayLevel)
-                    let center = CGFloat(barCount - 1) / 2.0
-                    let distFromCenter = abs(CGFloat(index) - center) / center
-                    let positionScale = 1.0 - (distFromCenter * 0.5)
-                    let boosted = pow(lastLevel * displayLevel, 0.5)
-                    let audioH = max(6.0, min(28.0, 6.0 + 22.0 * boosted * positionScale))
-                    
-                    // Wave overlay — very wide and gentle rolling wave
+                    let scale = positionScale[index]
+                    let minH: CGFloat = 5
+                    let maxH: CGFloat = 28
+
+                    // Audio-reactive height (decays when processing)
+                    let bandLevel = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
+                    let bandOffset = index < bandLevels.count ? CGFloat(bandLevels[index]) : 0
+                    let overall = bandLevels.isEmpty ? bandLevel : CGFloat(bandLevels.reduce(Float(0), +) / Float(bandLevels.count))
+                    let blended = (overall * 0.7 + bandOffset * 0.3) * audioDecay
+                    let barCeiling = minH + (maxH - minH) * scale
+                    let scaled = min(blended / 0.75, 1.0)
+                    let driven = pow(scaled, 0.6)
+                    let audioH = max(minH, min(barCeiling, minH + (barCeiling - minH) * driven))
+
+                    // Wave overlay (fades in during processing)
                     let distance = abs(Double(index) - waveCenter)
                     let wave = exp(-distance * distance / 6.0)
                     let waveH = 14.0 * CGFloat(wave) * waveStrength
-                    
-                    let barHeight = min(28.0, max(6.0, audioH + waveH))
-                    
-                    // Shimmer: opacity pulses with the wave — bright at peak, dim at rest
+
+                    let barHeight = min(28.0, max(minH, audioH + waveH))
+
+                    // Shimmer during processing
                     let dimOpacity = 0.35
                     let brightOpacity = 0.95
                     let shimmer = dimOpacity + (brightOpacity - dimOpacity) * Double(wave) * Double(waveStrength)
-                    // When wave hasn't faded in yet, keep full opacity
-                    let opacity = waveStrength > 0 ? shimmer : 0.9
-                    
+                    let barOpacity = waveStrength > 0.01 ? shimmer : 0.9
+
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.white.opacity(opacity))
+                        .fill(Color.white.opacity(barOpacity))
                         .frame(width: 3, height: barHeight)
                 }
             }
         }
+        .frame(height: 28)
+        .scaleEffect(x: appeared ? 1 : 0.001, y: 1, anchor: .center)
+        .opacity(appeared ? 1 : 0)
+        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: appeared)
         .onAppear {
-            startTime = Date()
-            displayLevel = 1
-            waveStrength = 0
-            withAnimation(.easeOut(duration: 0.35)) {
-                displayLevel = 0
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                appeared = true
             }
-            withAnimation(.easeIn(duration: 0.35).delay(0.15)) {
-                waveStrength = 1
+        }
+        .onChange(of: isProcessing) { processing in
+            if processing && !wasProcessing {
+                waveStart = Date()
+                withAnimation(.easeOut(duration: 0.35)) {
+                    audioDecay = 0
+                }
+                withAnimation(.easeIn(duration: 0.35).delay(0.15)) {
+                    waveStrength = 1
+                }
+            } else if !processing {
+                audioDecay = 1
+                waveStrength = 0
+                waveStart = nil
             }
+            wasProcessing = processing
         }
     }
 }

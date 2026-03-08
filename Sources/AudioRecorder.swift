@@ -11,6 +11,9 @@ class AudioRecorder {
     var onLevelUpdate: ((Float) -> Void)?
     var onBandLevels: (([Float]) -> Void)?
 
+    /// When paused, audio data is not written to the file but levels are still computed
+    private(set) var isPaused = false
+
     /// We compute 6 raw frequency bands, then mirror them for the 11-bar display
     private let rawBandCount = 6
 
@@ -34,9 +37,13 @@ class AudioRecorder {
 
         audioFile = try AVAudioFile(forWriting: tempURL, settings: settings)
 
+        isPaused = false
+
         engine.inputNode.installTap(onBus: 0, bufferSize: 2048, format: inputFormat) { [weak self] buffer, _ in
             guard let self = self else { return }
-            try? self.audioFile?.write(from: buffer)
+            if !self.isPaused {
+                try? self.audioFile?.write(from: buffer)
+            }
 
             guard let channelData = buffer.floatChannelData?[0] else { return }
             let frames = Int(buffer.frameLength)
@@ -67,6 +74,7 @@ class AudioRecorder {
         engine?.stop()
         engine = nil
         audioFile = nil
+        isPaused = false
         return FileManager.default.fileExists(atPath: tempURL.path) ? tempURL : nil
     }
 
@@ -76,6 +84,17 @@ class AudioRecorder {
         engine?.stop()
         engine = nil
         audioFile = nil
+        isPaused = false
+    }
+
+    /// Pause recording — audio data is not written but the engine stays running for level updates.
+    func pause() {
+        isPaused = true
+    }
+
+    /// Resume recording — audio data is written again, seamlessly stitching with prior audio.
+    func resume() {
+        isPaused = false
     }
     
     /// Compute frequency band levels using FFT via Accelerate

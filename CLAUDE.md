@@ -10,7 +10,7 @@ cp -r build/Yap.app /Applications/            # Install
 open /Applications/Yap.app                    # Run
 ```
 
-No package manager or Xcode project — just `swiftc` compiling all `Sources/*.swift` directly. Requires macOS 12+ and Xcode Command Line Tools.
+Uses Swift Package Manager (`Package.swift`) for compilation and dependency management. `build.sh` runs `swift build` then assembles the `.app` bundle. Requires macOS 13+ and Xcode Command Line Tools. Open `Package.swift` in Xcode for full IDE support (previews, debugging, breakpoints).
 
 **Runtime permissions**: Microphone, Speech Recognition, and Accessibility (System Settings → Privacy & Security). The app won't function without these.
 
