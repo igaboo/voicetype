@@ -309,6 +309,7 @@ class OverlayState: ObservableObject {
 struct OverlayView: View {
     @ObservedObject var state: OverlayState
     @State private var shakeProgress: CGFloat = 0
+    @State private var celebrationPhase: Double = 0
 
     private var isActive: Bool { state.mode != .idle || state.isOnboarding }
     private var isExpanded: Bool { state.mode != .idle || state.isOnboarding }
@@ -337,7 +338,7 @@ struct OverlayView: View {
     var body: some View {
         ZStack {
             if showGradient {
-                LavaLampBackground(energy: gradientEnergy)
+                LavaLampBackground(energy: gradientEnergy, celebrationPhase: celebrationPhase)
                     .allowsHitTesting(false)
                     .transition(.opacity.combined(with: .offset(y: 60)))
                     .animation(.easeInOut(duration: 0.8), value: gradientEnergy)
@@ -426,6 +427,12 @@ struct OverlayView: View {
         .onChange(of: state.mode) { _ in
             if state.mode != .idle {
                 state.isHovering = false
+            }
+        }
+        .onChange(of: state.onboardingStep) { step in
+            guard case .nice = step else { return }
+            withAnimation(.linear(duration: 3.0)) {
+                celebrationPhase += .pi * 4
             }
         }
     }
@@ -551,34 +558,52 @@ struct OverlayView: View {
 // MARK: - Onboarding Views
 
 struct LavaLampBackground: View {
-    var energy: CGFloat // 0 = calm, 1 = active
+    var energy: CGFloat
+    var celebrationPhase: Double = 0
 
     var body: some View {
         TimelineView(.animation) { timeline in
             let t = timeline.date.timeIntervalSinceReferenceDate
             let speed = 0.4 + energy * 0.6
             let brightness = 0.25 + energy * 0.25
+            let p = celebrationPhase
+
+            // Each blob orbits in a circle of radius 90pt during celebration,
+            // starting at a different quadrant so they fan out visibly.
+            // The orbit is added on top of the normal lissajous drift.
+            // Envelope: sin(p/4) is 0 at p=0, peaks at p=2π, 0 again at p=4π.
+            // Blobs glide smoothly out from rest, sweep big arcs, and glide back.
+            let envelope = CGFloat(max(0, sin(p / 4.0)))
+            let r: CGFloat = 150 * envelope
+            let ox0 = CGFloat(cos(p + 0)) * r;          let oy0 = CGFloat(sin(p + 0)) * r
+            let ox1 = CGFloat(cos(p + .pi * 0.5)) * r;  let oy1 = CGFloat(sin(p + .pi * 0.5)) * r
+            let ox2 = CGFloat(cos(p + .pi)) * r;         let oy2 = CGFloat(sin(p + .pi)) * r
+            let ox3 = CGFloat(cos(p + .pi * 1.5)) * r;  let oy3 = CGFloat(sin(p + .pi * 1.5)) * r
 
             ZStack {
                 Ellipse()
                     .fill(Color.purple.opacity(brightness))
                     .frame(width: 300, height: 140)
-                    .offset(x: cos(t * 0.7 * speed) * 120, y: sin(t * 0.5 * speed) * 35)
+                    .offset(x: cos(t * 0.7 * speed) * 120 + ox0,
+                            y: sin(t * 0.5 * speed) * 35 + oy0)
 
                 Ellipse()
                     .fill(Color.blue.opacity(brightness * 0.9))
                     .frame(width: 360, height: 160)
-                    .offset(x: sin(t * 0.6 * speed + 1.5) * 140, y: cos(t * 0.45 * speed + 1.0) * 40)
+                    .offset(x: sin(t * 0.6 * speed + 1.5) * 140 + ox1,
+                            y: cos(t * 0.45 * speed + 1.0) * 40 + oy1)
 
                 Ellipse()
                     .fill(Color.cyan.opacity(brightness * 0.85))
                     .frame(width: 280, height: 120)
-                    .offset(x: cos(t * 0.8 * speed + 3.0) * 100, y: sin(t * 0.6 * speed + 2.0) * 30)
+                    .offset(x: cos(t * 0.8 * speed + 3.0) * 100 + ox2,
+                            y: sin(t * 0.6 * speed + 2.0) * 30 + oy2)
 
                 Ellipse()
                     .fill(Color.indigo.opacity(brightness * 0.9))
                     .frame(width: 320, height: 130)
-                    .offset(x: sin(t * 0.55 * speed + 4.5) * 130, y: cos(t * 0.7 * speed + 3.5) * 35)
+                    .offset(x: sin(t * 0.55 * speed + 4.5) * 130 + ox3,
+                            y: cos(t * 0.7 * speed + 3.5) * 35 + oy3)
             }
             .blur(radius: 55)
         }
