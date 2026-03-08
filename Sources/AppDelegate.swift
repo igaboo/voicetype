@@ -732,7 +732,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         shortTapCleanupWork?.cancel()
         shortTapCleanupWork = nil
 
-        let onDoubleTapTip = overlayPanel.currentOnboardingStep == .doubleTapTip
+        let currentStep = overlayPanel.currentOnboardingStep
+        let onDoubleTapTip = currentStep == .doubleTapTip
+            || ((currentStep == .speakTip || currentStep == .holdTip) && preTipOnboardingStep == .doubleTapTip)
         guard UserDefaults.standard.bool(forKey: SettingsKey.onboardingComplete) || onDoubleTapTip else { return }
 
         if state == .recording {
@@ -744,8 +746,15 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
                 onStop: { [weak self] in self?.stopHandsFreeRecording() }
             )
         } else if state == .idle && onDoubleTapTip {
-            // doubleTapTip path: fn key was blocked on first tap, so start recorder now
+            // doubleTapTip path: fn key was blocked on first tap, so start recorder now.
+            // Also handles double-tap retry from a transient speakTip/holdTip caused by doubleTapTip.
             guard isEnabled else { return }
+            // If interrupting a transient tip, clean it up before taking over the UI
+            if currentStep == .speakTip || currentStep == .holdTip {
+                tipDismissWork?.cancel()
+                tipDismissWork = nil
+                preTipOnboardingStep = nil
+            }
             recordingStart = Date()
             peakAudioLevel = 0
             updateIcon(.recording)
