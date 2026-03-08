@@ -32,6 +32,9 @@ enum SettingsKey {
 
     // ElevenLabs options
     static let elLanguageCode = "elLanguageCode"
+
+    // Audio ducking
+    static let dimAudio = "dimAudio"
 }
 
 // MARK: - Reusable Components
@@ -108,6 +111,9 @@ struct SettingsView: View {
     // ElevenLabs options
     @State private var elLanguageCode: String
 
+    // Audio ducking
+    @State private var dimAudio: Bool
+
     var onSave: (() -> Void)?
     var onCancel: (() -> Void)?
 
@@ -136,6 +142,8 @@ struct SettingsView: View {
         _geminiTemperature = State(initialValue: d.object(forKey: SettingsKey.geminiTemperature) as? Double ?? 0.0)
 
         _elLanguageCode = State(initialValue: d.string(forKey: SettingsKey.elLanguageCode) ?? "")
+
+        _dimAudio = State(initialValue: d.object(forKey: SettingsKey.dimAudio) as? Bool ?? false)
     }
 
     private var selectedTxProvider: TranscriptionProvider {
@@ -299,6 +307,12 @@ struct SettingsView: View {
                             Text("Option").tag("option")
                         }
                         .pickerStyle(.menu)
+
+                        DescribedToggle(
+                            title: "Dim audio while recording",
+                            description: "Lowers system volume during recording for cleaner speech capture",
+                            isOn: $dimAudio
+                        )
                     }
 
                     // Transcription
@@ -432,6 +446,9 @@ struct SettingsView: View {
 
                     // ElevenLabs options
                     d.set(elLanguageCode, forKey: SettingsKey.elLanguageCode)
+
+                    // Audio ducking
+                    d.set(dimAudio, forKey: SettingsKey.dimAudio)
 
                     onSave?()
                 }

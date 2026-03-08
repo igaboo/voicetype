@@ -29,6 +29,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     private var audioRecorder = AudioRecorder()
     private var transcriber = Transcriber()
     private var pasteManager = PasteManager()
+    private var audioDucker = SystemAudioDucker()
     private lazy var overlayPanel = OverlayPanel()
     private var settingsWindow: SettingsWindow?
     private var state: AppState = .idle
@@ -349,6 +350,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
 
         do {
             try audioRecorder.start()
+            if UserDefaults.standard.bool(forKey: SettingsKey.dimAudio) {
+                audioDucker.duck()
+            }
             // Delay chime so hardware has settled after engine.start()
             let workItem = DispatchWorkItem { [weak self] in
                 self?.playSound("Blow")
@@ -357,6 +361,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: workItem)
         } catch {
             log("Recording failed: \(error)")
+            audioDucker.restore()
             state = .idle
             updateIcon(.idle)
             overlayPanel.dismiss()
@@ -563,6 +568,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     }
     
     private func showTip(_ step: OnboardingStep) {
+        audioDucker.restore()
         state = .idle
         updateIcon(.idle)
         overlayPanel.showNoSpeech()
@@ -589,6 +595,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     }
 
     private func finishProcessing() {
+        audioDucker.restore()
         state = .idle
         updateIcon(.idle)
         overlayPanel.dismiss()
@@ -640,6 +647,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
         chimeWorkItem = nil
 
         guard let audioURL = audioRecorder.stop() else {
+            audioDucker.restore()
             playSound("Pop")
             state = .idle
             updateIcon(.idle)
@@ -688,6 +696,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, SettingsDelegate {
     
     /// Show a brief error message in the overlay pill, then auto-dismiss
     private func showError(_ error: Error) {
+        audioDucker.restore()
         state = .idle
         updateIcon(.idle)
         
