@@ -710,6 +710,22 @@ pub fn init(app: &AppHandle) {
 
     // Show overlay window (always-visible pill in idle state)
     if let Some(overlay) = app.get_webview_window("overlay") {
+        // Position at bottom-center of primary monitor
+        if let Ok(monitor) = overlay.primary_monitor() {
+            if let Some(monitor) = monitor {
+                let screen = monitor.size();
+                let scale = monitor.scale_factor();
+                let win_w = 1400.0;
+                let win_h = 700.0;
+                let x = ((screen.width as f64 / scale) - win_w) / 2.0;
+                let y = (screen.height as f64 / scale) - win_h;
+                let _ = overlay.set_position(tauri::PhysicalPosition::new(
+                    (x * scale) as i32,
+                    (y * scale) as i32,
+                ));
+                log::info(&format!("Overlay positioned at {},{} (screen {}x{}, scale {})", x as i32, y as i32, screen.width, screen.height, scale));
+            }
+        }
         let _ = overlay.show();
         log::info("Overlay window shown");
     } else {
