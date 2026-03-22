@@ -21,7 +21,10 @@ function tauriMultiWindow() {
 
       server.middlewares.use((req, res, next) => {
         if (standalonePages.includes(req.url)) {
-          const html = readFileSync(resolve("src" + req.url), "utf-8");
+          let html = readFileSync(resolve("src" + req.url), "utf-8");
+          // Rewrite relative script/link paths to /src/ so Vite can resolve them
+          html = html.replace(/src="\.\/([^"]+)"/g, 'src="/src/$1"');
+          html = html.replace(/href="\.\/([^"]+)"/g, 'href="/src/$1"');
           server.transformIndexHtml(req.url, html).then((transformed) => {
             res.setHeader("Content-Type", "text/html");
             res.end(transformed);
@@ -37,6 +40,15 @@ function tauriMultiWindow() {
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit(), tauriMultiWindow()],
+  build: {
+    rollupOptions: {
+      input: {
+        overlay: resolve("src/overlay.html"),
+        settings: resolve("src/settings.html"),
+        history: resolve("src/history.html"),
+      },
+    },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
