@@ -140,6 +140,7 @@ mod platform {
 
         // kCFRunLoopCommonModes is an external C symbol
         static kCFRunLoopCommonModes: CFStringRef;
+        static kCFRunLoopDefaultMode: CFStringRef;
 
         // kCFAllocatorDefault
         static kCFAllocatorDefault: CFAllocatorRef;
@@ -228,10 +229,12 @@ mod platform {
                     CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
                     CGEventTapEnable(tap, true);
 
-                    // Run the loop until stopped
+                    // Run the loop until stopped.
+                    // MUST use kCFRunLoopDefaultMode here (not CommonModes — that's
+                    // only valid for AddSource, not RunInMode).
                     while RUNNING.load(Ordering::SeqCst) {
                         CFRunLoopRunInMode(
-                            kCFRunLoopCommonModes,
+                            kCFRunLoopDefaultMode,
                             0.25, // check every 250ms if we should stop
                             0,    // returnAfterSourceHandled = false
                         );
