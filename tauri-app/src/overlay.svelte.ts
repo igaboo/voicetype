@@ -17,7 +17,7 @@ const overlayState = $state({
   alwaysVisible: true,
   handsFreeElapsed: 0,
   hotkeyLabel: 'fn',
-  visible: false,
+  visible: true,
 });
 
 // Mount the Overlay component
@@ -28,20 +28,18 @@ const app = mount(Overlay, {
 
 // ── Tauri IPC Event Listeners ──────────────────────────────────────────
 
-listen<{ levels: number[] }>('audio:levels', (event) => {
-  overlayState.bandLevels = event.payload.levels;
-  // Compute overall audio level as average
-  const sum = event.payload.levels.reduce((a, b) => a + b, 0);
-  overlayState.audioLevel = sum / event.payload.levels.length;
+listen<{ level: number; bars: number[] }>('audio:levels', (event) => {
+  overlayState.bandLevels = event.payload.bars;
+  overlayState.audioLevel = event.payload.level;
 });
 
-listen<{ mode: string; handsFree?: boolean; paused?: boolean; elapsed?: number }>(
+listen<{ state: string; handsFree?: boolean; paused?: boolean; elapsed?: number }>(
   'state:change',
   (event) => {
-    const { mode, handsFree, paused, elapsed } = event.payload;
+    const { state, handsFree, paused, elapsed } = event.payload;
 
-    if (mode === 'recording' || mode === 'processing' || mode === 'idle' || mode === 'noSpeech') {
-      overlayState.mode = mode;
+    if (state === 'recording' || state === 'processing' || state === 'idle' || state === 'noSpeech') {
+      overlayState.mode = state;
     }
 
     if (handsFree !== undefined) {

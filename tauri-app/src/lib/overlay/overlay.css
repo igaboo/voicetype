@@ -56,7 +56,7 @@
   flex-direction: column;
   align-items: center;
   justify-content: flex-end;
-  padding-bottom: 260px;
+  padding-bottom: 40px;
   pointer-events: none;
   font-family: var(--font-family);
   -webkit-font-smoothing: antialiased;
