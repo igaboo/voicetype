@@ -71,15 +71,13 @@
     position: absolute;
     inset: -40px;
     pointer-events: none;
-    transform: translateY(80px);
-    visibility: hidden;
-    transition: transform 500ms cubic-bezier(0.16, 1, 0.3, 1);
-    will-change: transform;
+    opacity: 1;
+    transform: translateY(120px);
+    transition: transform 600ms cubic-bezier(0.16, 1, 0.3, 1);
   }
 
   .lava-lamp-outer.active {
     transform: translateY(0);
-    visibility: visible;
   }
 
   .lava-lamp-inner {
