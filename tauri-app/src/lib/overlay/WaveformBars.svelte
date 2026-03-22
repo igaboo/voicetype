@@ -126,21 +126,29 @@
 
   // Transition to/from processing mode
   let prevMode: string = $state('idle');
+  let transitionCancelled = false;
 
   $effect(() => {
     if (mode === 'processing' && prevMode !== 'processing') {
       // Entering processing — decay audio, ramp up wave
       shimmerStart = 0;
+      transitionCancelled = false;
       transitionToProcessing();
       shimmerFrame = requestAnimationFrame(shimmerLoop);
     } else if (mode !== 'processing' && prevMode === 'processing') {
-      // Leaving processing
+      // Leaving processing — cancel all animations
+      transitionCancelled = true;
       cancelAnimationFrame(shimmerFrame);
       shimmerFrame = 0;
       audioDecay = 1;
       waveStrength = 0;
     }
     prevMode = mode;
+
+    return () => {
+      // Component unmounting — cancel any in-flight transition animations
+      transitionCancelled = true;
+    };
   });
 
   function transitionToProcessing() {
@@ -149,6 +157,7 @@
     const decayFrom = audioDecay;
 
     function decayStep(ts: number) {
+      if (transitionCancelled) return;
       const progress = Math.min((ts - decayStart) / 350, 1);
       // Ease out
       audioDecay = decayFrom * (1 - easeOut(progress));
@@ -158,9 +167,11 @@
 
     // Animate waveStrength from 0 to 1 over 350ms, delayed 150ms
     setTimeout(() => {
+      if (transitionCancelled) return;
       const waveStart = performance.now();
 
       function waveStep(ts: number) {
+        if (transitionCancelled) return;
         const progress = Math.min((ts - waveStart) / 350, 1);
         waveStrength = easeIn(progress);
         if (progress < 1) requestAnimationFrame(waveStep);
@@ -179,7 +190,7 @@
 
   // Bar entrance animation
   $effect(() => {
-    if (mode === 'recording' || mode === 'processing') {
+    if (mode === 'recording' || mode === 'processing' || mode === 'noSpeech') {
       setTimeout(() => {
         appeared = true;
       }, 50);

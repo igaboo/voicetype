@@ -43,7 +43,17 @@ pub enum AppState {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StateChangePayload {
-    state: AppState,
+    /// Simplified state string for the frontend: "idle", "recording", "processing".
+    state: String,
+    /// Whether hands-free mode is active.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hands_free: Option<bool>,
+    /// Whether hands-free recording is paused.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    paused: Option<bool>,
+    /// Elapsed recording time in seconds (for timer display).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    elapsed: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -74,7 +84,7 @@ struct OrchestratorInner {
 impl OrchestratorInner {
     /// Emit a state change event to the frontend and update the tray icon.
     fn emit_state(&self) {
-        let _ = self.app.emit("state:change", StateChangePayload { state: self.state });
+        // Map internal state to simplified frontend state string
         let state_str = match self.state {
             AppState::Idle => "idle",
             AppState::Recording => "recording",
@@ -82,6 +92,36 @@ impl OrchestratorInner {
             AppState::HandsFreePaused => "recording",
             AppState::Processing => "processing",
         };
+
+        // Include hands-free metadata when in a recording state
+        let (hands_free, paused, elapsed) = match self.state {
+            AppState::HandsFreeRecording => {
+                let elapsed = self.recording_start
+                    .map(|s| s.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                (Some(true), Some(false), Some(elapsed))
+            }
+            AppState::HandsFreePaused => {
+                let elapsed = self.recording_start
+                    .map(|s| s.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                (Some(true), Some(true), Some(elapsed))
+            }
+            AppState::Recording => {
+                let elapsed = self.recording_start
+                    .map(|s| s.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                (Some(false), None, Some(elapsed))
+            }
+            _ => (None, None, None),
+        };
+
+        let _ = self.app.emit("state:change", StateChangePayload {
+            state: state_str.to_string(),
+            hands_free,
+            paused,
+            elapsed,
+        });
         tray::update_icon(&self.app, state_str);
     }
 
@@ -594,7 +634,7 @@ fn classify_error(error: &str) -> String {
 // Sound effects
 // ---------------------------------------------------------------------------
 
-fn play_sound(app: &AppHandle, name: &str) {
+pub(crate) fn play_sound(app: &AppHandle, name: &str) {
     let cfg = config::get();
     if !cfg.sounds_enabled {
         return;
@@ -605,7 +645,7 @@ fn play_sound(app: &AppHandle, name: &str) {
         .path()
         .resource_dir()
         .ok()
-        .map(|dir| dir.join("sounds").join(format!("{name}.aiff")));
+        .map(|dir| dir.join("sounds").join(format!("{name}.wav")));
 
     if let Some(path) = resource_path {
         if path.exists() {
@@ -660,10 +700,12 @@ fn start_hotkey_listener(orch: Arc<Orchestrator>, modifier: HotkeyModifier) {
 
 /// Spawn a background thread that polls audio levels every ~33ms and
 /// forwards them to the orchestrator (which emits to the frontend).
+/// Also emits elapsed time once per second for the timer display.
 fn start_level_poller(orch: Arc<Orchestrator>) {
     std::thread::Builder::new()
         .name("yap-level-poller".into())
         .spawn(move || {
+            let mut tick_count: u32 = 0;
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(33));
                 let state = orch.state();
@@ -673,6 +715,16 @@ fn start_level_poller(orch: Arc<Orchestrator>) {
                 {
                     let levels = audio::get_levels();
                     orch.on_audio_levels(levels);
+
+                    // Emit state (with elapsed time) roughly once per second
+                    // for the timer display (every ~30 ticks at 33ms = ~990ms)
+                    tick_count += 1;
+                    if tick_count % 30 == 0 {
+                        let inner = orch.inner.lock().unwrap();
+                        inner.emit_state();
+                    }
+                } else {
+                    tick_count = 0;
                 }
             }
         })

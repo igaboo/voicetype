@@ -1,7 +1,7 @@
 use tauri::{
     image::Image,
     menu::{CheckMenuItemBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
-    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    tray::TrayIconBuilder,
     AppHandle, Emitter, Manager,
 };
 
@@ -75,16 +75,18 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     if let Some(window) = app.get_webview_window("settings") {
                         let _ = window.show();
                         let _ = window.set_focus();
-                    } else if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("navigate", "settings");
                     }
-                    let _ = app.emit("tray:show-settings", ());
                 }
                 "show_history" => {
+                    if let Some(window) = app.get_webview_window("history") {
+                        let _ = window.show();
+                        let _ = window.set_focus();
+                    }
                     let _ = app.emit("tray:show-history", ());
                 }
                 "clear_history" => {
                     let _ = history::clear();
+                    refresh_history_menu(app);
                     let _ = app.emit("tray:history-cleared", ());
                 }
                 "quit" => {
@@ -101,20 +103,8 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 _ => {}
             }
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
-                button: MouseButton::Left,
-                button_state: MouseButtonState::Up,
-                ..
-            } = event
-            {
-                let app = tray.app_handle();
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.unminimize();
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
+        .on_tray_icon_event(|_tray, _event| {
+            // Left-click shows menu via show_menu_on_left_click(true)
         })
         .build(app)
         .map_err(|e| format!("failed to build tray icon: {e}"))?;

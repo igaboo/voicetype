@@ -10,6 +10,7 @@
   import './settings.css';
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { onDestroy } from 'svelte';
 
   // ── Config Shape (matches Rust AppConfig with camelCase serde) ─────────
 
@@ -286,7 +287,28 @@
 
   // ── Init ──────────────────────────────────────────────────────────────
 
+  // Load config immediately on mount.
   loadConfig();
+
+  // Re-load config whenever the settings window is shown / focused, so
+  // the form always reflects the latest persisted values (the window is
+  // hidden rather than destroyed when closed).
+  let unlistenFocus: (() => void) | undefined;
+
+  getCurrentWindow()
+    .onFocusChanged(({ payload: focused }) => {
+      if (focused) {
+        loading = true;
+        loadConfig();
+      }
+    })
+    .then((fn) => {
+      unlistenFocus = fn;
+    });
+
+  onDestroy(() => {
+    unlistenFocus?.();
+  });
 </script>
 
 <svelte:window onkeydown={onKeyDown} />
