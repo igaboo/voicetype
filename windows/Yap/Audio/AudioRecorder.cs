@@ -1,22 +1,23 @@
 using System;
 using System.IO;
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using Yap.Core;
 
 namespace Yap.Audio
 {
     /// <summary>
-    /// Records audio from the default input device using NAudio's WasapiCapture.
-    /// Writes 16-bit PCM WAV to a temp file.
-    /// Provides real-time RMS level and FFT band-level callbacks.
-    /// Mirrors AudioRecorder from the macOS version.
+    /// Records audio from the default capture device using WASAPI.
+    /// WASAPI provides IEEE Float32 samples which are converted to 16-bit PCM for WAV output.
     /// </summary>
     public class AudioRecorder : IDisposable
     {
-        private WaveInEvent? _waveIn;
+        private WasapiCapture? _capture;
         private WaveFileWriter? _writer;
         private readonly FftProcessor _fftProcessor = new();
         private bool _disposed;
+        private int _nativeChannels;
+        private int _nativeSampleRate;
 
         /// <summary>Temporary file path for the current recording.</summary>
         public string TempFilePath { get; } = Path.Combine(Path.GetTempPath(), "yap_recording.wav");
@@ -31,10 +32,8 @@ namespace Yap.Audio
         public bool IsPaused { get; private set; }
 
         /// <summary>
-        /// Start recording from the default microphone input.
-        /// Creates a fresh capture device each call.
-        /// Queries the device's native sample rate and keeps 16-bit mono.
-        /// Falls back to 16kHz if the device query fails.
+        /// Start recording from the default microphone using WASAPI.
+        /// WASAPI uses the device's native format (IEEE Float32, typically 48kHz).
         /// </summary>
         public void Start()
         {
@@ -44,23 +43,41 @@ namespace Yap.Audio
 
             IsPaused = false;
 
-            // Use 44100Hz — universally supported by all modern microphones.
-            // WaveInEvent defaults to 8kHz (telephony) which many devices don't capture properly.
-            const int sampleRate = 44100;
-
-            _waveIn = new WaveInEvent
+            // Get the default capture device via MMDeviceEnumerator (reliable on Windows 10/11)
+            var enumerator = new MMDeviceEnumerator();
+            MMDevice device;
+            try
             {
-                WaveFormat = new WaveFormat(sampleRate, 16, 1), // device rate, 16-bit, mono
-                BufferMilliseconds = 50
+                device = enumerator.GetDefaultAudioEndpoint(DataFlow.Capture, Role.Communications);
+                Logger.Log($"AudioRecorder: device='{device.FriendlyName}'");
+            }
+            catch (Exception ex)
+            {
+                Logger.Log($"AudioRecorder: no capture device found: {ex.Message}");
+                return;
+            }
+
+            // Create WASAPI capture in shared mode (allows other apps to use mic)
+            _capture = new WasapiCapture(device, useEventSync: true)
+            {
+                ShareMode = AudioClientShareMode.Shared,
             };
 
-            _writer = new WaveFileWriter(TempFilePath, _waveIn.WaveFormat);
+            // WASAPI dictates the format — typically IEEE Float32, 48000Hz, stereo
+            var nativeFormat = _capture.WaveFormat;
+            _nativeChannels = nativeFormat.Channels;
+            _nativeSampleRate = nativeFormat.SampleRate;
+            Logger.Log($"AudioRecorder: native format={nativeFormat.Encoding}, {nativeFormat.BitsPerSample}-bit, {_nativeSampleRate}Hz, {_nativeChannels}ch");
 
-            _waveIn.DataAvailable += OnDataAvailable;
-            _waveIn.RecordingStopped += OnRecordingStopped;
+            // Write as 16-bit PCM mono WAV (what speech-to-text APIs expect)
+            var outputFormat = new WaveFormat(_nativeSampleRate, 16, 1);
+            _writer = new WaveFileWriter(TempFilePath, outputFormat);
 
-            _waveIn.StartRecording();
-            Logger.Log($"AudioRecorder: started at {sampleRate}Hz");
+            _capture.DataAvailable += OnDataAvailable;
+            _capture.RecordingStopped += OnRecordingStopped;
+
+            _capture.StartRecording();
+            Logger.Log($"AudioRecorder: started at {_nativeSampleRate}Hz");
         }
 
         /// <summary>
@@ -74,7 +91,7 @@ namespace Yap.Audio
             if (File.Exists(TempFilePath))
             {
                 var info = new FileInfo(TempFilePath);
-                if (info.Length > 44) // WAV header is 44 bytes; must have actual audio data
+                if (info.Length > 44)
                 {
                     Logger.Log($"AudioRecorder: stopped, file size={info.Length}");
                     return TempFilePath;
@@ -85,9 +102,7 @@ namespace Yap.Audio
             return null;
         }
 
-        /// <summary>
-        /// Cancel recording without returning data.
-        /// </summary>
+        /// <summary>Cancel recording without returning data.</summary>
         public void Cancel()
         {
             StopInternal();
@@ -99,67 +114,67 @@ namespace Yap.Audio
             Logger.Log("AudioRecorder: cancelled");
         }
 
-        /// <summary>Pause recording - audio data is not written but levels continue updating.</summary>
+        /// <summary>Pause recording — audio data is not written but levels continue updating.</summary>
         public void Pause()
         {
             IsPaused = true;
             Logger.Log("AudioRecorder: paused");
         }
 
-        /// <summary>Resume recording - audio data is written again.</summary>
+        /// <summary>Resume recording — audio data is written again.</summary>
         public void Resume()
         {
             IsPaused = false;
             Logger.Log("AudioRecorder: resumed");
         }
 
-        private int _diagCount;
-
         private void OnDataAvailable(object? sender, WaveInEventArgs e)
         {
-            // Write audio data to file (unless paused)
-            if (!IsPaused && _writer != null)
-            {
-                _writer.Write(e.Buffer, 0, e.BytesRecorded);
-            }
-
-            // Always compute levels (even when paused, for visual feedback)
             if (e.BytesRecorded == 0) return;
 
-            // Diagnostic: log first few buffers to see raw sample values
-            _diagCount++;
-            if (_diagCount <= 3)
+            // WASAPI provides IEEE Float32: 4 bytes per sample per channel
+            int bytesPerFrame = 4 * _nativeChannels;
+            int frameCount = e.BytesRecorded / bytesPerFrame;
+
+            // Convert Float32 multi-channel → mono Float32 samples + 16-bit PCM for file
+            var monoSamples = new float[frameCount];
+            var pcmBuffer = new byte[frameCount * 2]; // 16-bit mono
+
+            for (int i = 0; i < frameCount; i++)
             {
-                short maxSample = 0;
-                for (int j = 0; j < Math.Min(e.BytesRecorded / 2, 100); j++)
+                // Mix all channels to mono by averaging
+                float sum = 0;
+                for (int ch = 0; ch < _nativeChannels; ch++)
                 {
-                    short s = BitConverter.ToInt16(e.Buffer, j * 2);
-                    if (Math.Abs(s) > Math.Abs(maxSample)) maxSample = s;
+                    sum += BitConverter.ToSingle(e.Buffer, i * bytesPerFrame + ch * 4);
                 }
-                Logger.Log($"AudioRecorder DIAG: buffer #{_diagCount}, bytes={e.BytesRecorded}, maxSample(first100)={maxSample}, device={_waveIn?.DeviceNumber}");
+                float sample = sum / _nativeChannels;
+                monoSamples[i] = sample;
+
+                // Convert to 16-bit PCM for WAV file
+                sample = Math.Clamp(sample, -1.0f, 1.0f);
+                short pcm = (short)(sample * 32767f);
+                pcmBuffer[i * 2] = (byte)(pcm & 0xFF);
+                pcmBuffer[i * 2 + 1] = (byte)((pcm >> 8) & 0xFF);
             }
 
-            // Convert 16-bit PCM bytes to float samples
-            int sampleCount = e.BytesRecorded / 2; // 16-bit = 2 bytes per sample
-            var samples = new float[sampleCount];
-            for (int i = 0; i < sampleCount; i++)
+            // Write to file (unless paused)
+            if (!IsPaused && _writer != null)
             {
-                short sample = BitConverter.ToInt16(e.Buffer, i * 2);
-                samples[i] = sample / 32768f;
+                _writer.Write(pcmBuffer, 0, pcmBuffer.Length);
             }
 
             // Compute RMS level
-            float sum = 0;
-            for (int i = 0; i < samples.Length; i++)
+            float rmsSum = 0;
+            for (int i = 0; i < monoSamples.Length; i++)
             {
-                sum += samples[i] * samples[i];
+                rmsSum += monoSamples[i] * monoSamples[i];
             }
-            float rms = MathF.Sqrt(sum / Math.Max(samples.Length, 1));
+            float rms = MathF.Sqrt(rmsSum / Math.Max(monoSamples.Length, 1));
             float level = Math.Min(rms * 18.0f, 1.0f);
 
             // Compute FFT band levels
-            float sampleRate = _waveIn?.WaveFormat.SampleRate ?? 16000;
-            var rawBands = _fftProcessor.ComputeBands(samples, sampleRate);
+            var rawBands = _fftProcessor.ComputeBands(monoSamples, _nativeSampleRate);
             var mirrored = _fftProcessor.MirrorBands(rawBands);
 
             // Dispatch to UI thread
@@ -180,10 +195,7 @@ namespace Yap.Audio
 
         private void StopInternal()
         {
-            try
-            {
-                _waveIn?.StopRecording();
-            }
+            try { _capture?.StopRecording(); }
             catch { /* ignore */ }
 
             try
@@ -195,8 +207,8 @@ namespace Yap.Audio
 
             try
             {
-                _waveIn?.Dispose();
-                _waveIn = null;
+                _capture?.Dispose();
+                _capture = null;
             }
             catch { /* ignore */ }
         }
