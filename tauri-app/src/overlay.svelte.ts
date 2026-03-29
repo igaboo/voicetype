@@ -83,8 +83,10 @@ listen<{ visible: boolean }>('overlay:visibility', (event) => {
 
 const appWindow = getCurrentWindow();
 
-// Start with click-through enabled so the overlay doesn't block interaction
-appWindow.setIgnoreCursorEvents(true);
+// Start with click-through enabled so the overlay doesn't block interaction.
+// forward: true is required on macOS so mouse events still reach the WebView
+// (without it, mouseenter/mouseleave won't fire and the pill is unclickable).
+appWindow.setIgnoreCursorEvents(true, { forward: true });
 
 // The pill element dispatches custom events to toggle click-through
 window.addEventListener('pill:mouseenter', () => {
@@ -92,5 +94,5 @@ window.addEventListener('pill:mouseenter', () => {
 });
 
 window.addEventListener('pill:mouseleave', () => {
-  appWindow.setIgnoreCursorEvents(true);
+  appWindow.setIgnoreCursorEvents(true, { forward: true });
 });

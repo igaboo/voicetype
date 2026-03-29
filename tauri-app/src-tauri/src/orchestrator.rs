@@ -205,7 +205,6 @@ impl Orchestrator {
                 let mut inner = self.inner.lock().unwrap();
                 inner.state = AppState::Idle;
                 inner.emit_error(&format!("Recording failed: {e}"));
-                inner.emit_state();
             }
         }
     }
@@ -292,7 +291,6 @@ impl Orchestrator {
                         let mut inner = self.inner.lock().unwrap();
                         inner.state = AppState::Idle;
                         inner.emit_error(&format!("Recording failed: {e}"));
-                        inner.emit_state();
                     }
                 }
             }
@@ -368,7 +366,6 @@ impl Orchestrator {
                         let mut inner = self.inner.lock().unwrap();
                         inner.state = AppState::Idle;
                         inner.emit_error(&format!("Recording failed: {e}"));
-                        inner.emit_state();
                     }
                 }
             }
