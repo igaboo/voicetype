@@ -4,7 +4,7 @@
    * Blobs slide up from off-screen by animating their Y% position directly.
    */
 
-  let { energy = 0.5, visible = true }: { energy?: number; visible?: boolean } = $props();
+  let { energy = 0.5, visible = true, celebrating = false }: { energy?: number; visible?: boolean; celebrating?: boolean } = $props();
 
   let t = $state(0);
   let slideOffset = $state(40); // starts 60% below — off screen
@@ -24,17 +24,40 @@
     { color: '99, 102, 241',  offsetX:  7,  offsetY: -2,  size: 240, scale: 0.9  },
   ];
 
+  // Celebration phase — smoothly ramps up then back down over 3s
+  let celebrationPhase = $state(0);
+  let celebrationStart = 0;
+  const CELEBRATION_DURATION = 3000;
+
+  $effect(() => {
+    if (celebrating && celebrationStart === 0) {
+      celebrationStart = performance.now();
+    } else if (!celebrating) {
+      celebrationStart = 0;
+      celebrationPhase = 0;
+    }
+  });
+
   let blobStyles = $derived.by(() => {
     const groupX = Math.cos(t * 0.2) * 6;
     const groupY = Math.sin(t * 0.15) * 3;
+
+    // Celebration: blobs orbit outward then return (sin envelope over 4pi)
+    const envelope = celebrationPhase > 0 ? Math.max(0, Math.sin(celebrationPhase / 4)) : 0;
+    const orbitR = 25 * envelope; // radius in percent units
 
     return blobs.map((b, i) => {
       const wiggleX = Math.sin(t * (0.35 + i * 0.1) + i * 1.5) * 3;
       const wiggleY = Math.cos(t * (0.25 + i * 0.08) + i * 2.0) * 2;
 
-      const x = 50 + groupX + b.offsetX + wiggleX;
+      // Celebration orbit offset for each blob at different quadrants
+      const angle = celebrationPhase + i * Math.PI * 0.5;
+      const orbitX = Math.cos(angle) * orbitR;
+      const orbitY = Math.sin(angle) * orbitR;
+
+      const x = 50 + groupX + b.offsetX + wiggleX + orbitX;
       // slideOffset drives the vertical entrance/exit
-      const y = 90 + groupY + b.offsetY + wiggleY + slideOffset;
+      const y = 90 + groupY + b.offsetY + wiggleY + slideOffset + orbitY;
 
       const alpha = 0.7 * b.scale;
       return `radial-gradient(ellipse ${b.size}px ${b.size * 0.55}px at ${x}% ${y}%, rgba(${b.color}, ${alpha.toFixed(2)}) 0%, rgba(${b.color}, 0) 70%)`;
@@ -49,6 +72,17 @@
   function loop(timestamp: number) {
     if (!startTime) startTime = timestamp;
     t = (timestamp - startTime) / 1000;
+
+    // Drive celebration phase (ramps linearly from 0 to 4pi over 3s)
+    if (celebrationStart > 0) {
+      const elapsed = timestamp - celebrationStart;
+      const progress = Math.min(elapsed / CELEBRATION_DURATION, 1);
+      celebrationPhase = progress * Math.PI * 4;
+      if (progress >= 1) {
+        celebrationStart = 0;
+        celebrationPhase = 0;
+      }
+    }
 
     // Animate slideOffset + fadeOpacity
     if (slideStart > 0) {

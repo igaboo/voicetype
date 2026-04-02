@@ -10,8 +10,12 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use rand::prelude::IndexedRandom;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
+
+#[cfg(not(target_os = "macos"))]
+use tauri::Listener;
 
 use crate::audio::{self, AudioLevels};
 use crate::config::{self, AppConfig};
@@ -63,6 +67,105 @@ struct ErrorPayload {
 }
 
 // ---------------------------------------------------------------------------
+// Onboarding step state machine
+// ---------------------------------------------------------------------------
+
+/// All onboarding steps, matching the Swift app's guided flow.
+///
+/// Flow: tryIt -> nice -> doubleTapTip -> nice -> clickTip -> nice -> apiTip
+///       -> formattingTip -> welcome -> complete
+///
+/// Transient tips (speakTip, holdTip) overlay the current step temporarily.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OnboardingStep {
+    TryIt,
+    Nice,
+    DoubleTapTip,
+    ClickTip,
+    ApiTip,
+    FormattingTip,
+    Welcome,
+    SpeakTip,
+    HoldTip,
+}
+
+impl OnboardingStep {
+    fn to_str(&self) -> &'static str {
+        match self {
+            Self::TryIt => "tryIt",
+            Self::Nice => "nice",
+            Self::DoubleTapTip => "doubleTapTip",
+            Self::ClickTip => "clickTip",
+            Self::ApiTip => "apiTip",
+            Self::FormattingTip => "formattingTip",
+            Self::Welcome => "welcome",
+            Self::SpeakTip => "speakTip",
+            Self::HoldTip => "holdTip",
+        }
+    }
+}
+
+/// The next step to advance to after a `nice` celebration.
+/// Stored separately since `nice` itself is just a visual celebration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct NiceContext {
+    next_step: OnboardingStep,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OnboardingPayload {
+    step: String,
+    text: String,
+    hotkey_label: String,
+}
+
+static NICE_MESSAGES: &[&str] = &[
+    "Nice! \u{1f389}",
+    "Nailed it! \u{2728}",
+    "Sounds good! \u{1f44c}",
+    "Got it! \u{1f64c}",
+    "Perfect! \u{1f3af}",
+    "Love it! \u{1f4ab}",
+];
+
+/// Build the onboarding card HTML text for a given step.
+fn onboarding_text(step: &OnboardingStep, hotkey_label: &str) -> String {
+    match step {
+        OnboardingStep::TryIt => format!(
+            "Hold <span class=\"keycap\">{}</span> and speak — Yap transcribes it",
+            hotkey_label
+        ),
+        OnboardingStep::Nice => {
+            let mut rng = rand::rng();
+            NICE_MESSAGES.choose(&mut rng).unwrap_or(&"Nice! \u{1f389}").to_string()
+        }
+        OnboardingStep::DoubleTapTip => format!(
+            "Double-tap <span class=\"keycap\">{}</span> for hands-free transcription",
+            hotkey_label
+        ),
+        OnboardingStep::ClickTip => "Click the pill for hands-free transcription".to_string(),
+        OnboardingStep::ApiTip => {
+            "Add an API key in the menu bar for better transcription".to_string()
+        }
+        OnboardingStep::FormattingTip => {
+            "Enable formatting in Settings to clean up grammar and punctuation automatically"
+                .to_string()
+        }
+        OnboardingStep::Welcome => "You're all set — enjoy! \u{1f389}".to_string(),
+        OnboardingStep::SpeakTip => format!(
+            "Didn't catch that — speak up while holding <span class=\"keycap\">{}</span>",
+            hotkey_label
+        ),
+        OnboardingStep::HoldTip => format!(
+            "Hold <span class=\"keycap\">{}</span> — don't just tap it",
+            hotkey_label
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator inner (lives behind Arc<Mutex<_>>)
 // ---------------------------------------------------------------------------
 
@@ -79,6 +182,22 @@ struct OrchestratorInner {
     ignore_pending_key_up: bool,
     /// Handle to emit events and manage windows.
     app: AppHandle,
+
+    // -- Onboarding state --
+
+    /// Current onboarding step (None = onboarding complete or not started).
+    onboarding_step: Option<OnboardingStep>,
+    /// Whether onboarding is complete (mirrors config.onboarding_complete).
+    onboarding_complete: bool,
+    /// The step that was active before a transient tip (speakTip/holdTip)
+    /// overwrote it. Used to restore after the tip auto-dismisses.
+    pre_tip_step: Option<OnboardingStep>,
+    /// When showing a `nice` step, the next step to advance to.
+    nice_context: Option<NiceContext>,
+    /// Timestamp of a pending hold-to-confirm action (for apiTip/formattingTip/welcome).
+    hold_confirm_start: Option<Instant>,
+    /// The hotkey label to display in onboarding cards.
+    hotkey_label: String,
 }
 
 impl OrchestratorInner {
@@ -123,16 +242,62 @@ impl OrchestratorInner {
             elapsed,
         });
         tray::update_icon(&self.app, state_str);
+
+        // Send to native overlay sidecar on macOS
+        #[cfg(target_os = "macos")]
+        crate::sidecar::send(&crate::sidecar::OutMessage::State {
+            state: state_str.to_string(),
+            hands_free: hands_free.unwrap_or(false),
+            paused: paused.unwrap_or(false),
+            elapsed: elapsed.unwrap_or(0.0),
+        });
     }
 
     /// Emit an error event to the frontend.
     fn emit_error(&self, message: &str) {
         let _ = self.app.emit("error:show", ErrorPayload { message: message.to_string() });
+        #[cfg(target_os = "macos")]
+        crate::sidecar::send(&crate::sidecar::OutMessage::Error {
+            message: message.to_string(),
+        });
     }
 
     /// Emit audio levels to the frontend.
     fn emit_levels(&self, levels: &AudioLevels) {
         let _ = self.app.emit("audio:levels", levels);
+        #[cfg(target_os = "macos")]
+        crate::sidecar::send(&crate::sidecar::OutMessage::Levels {
+            level: levels.level,
+            bars: levels.bars.to_vec(),
+        });
+    }
+
+    /// Emit onboarding step change to the frontend.
+    fn emit_onboarding(&self) {
+        let step_str = self.onboarding_step.as_ref().map(|s| s.to_str().to_string()).unwrap_or_default();
+        let text = self.onboarding_step.as_ref()
+            .map(|s| onboarding_text(s, &self.hotkey_label))
+            .unwrap_or_default();
+
+        let _ = self.app.emit("onboarding:step", OnboardingPayload {
+            step: step_str.clone(),
+            text: text.clone(),
+            hotkey_label: self.hotkey_label.clone(),
+        });
+
+        #[cfg(target_os = "macos")]
+        crate::sidecar::send(&crate::sidecar::OutMessage::Onboarding {
+            step: step_str,
+            text,
+            hotkey_label: self.hotkey_label.clone(),
+        });
+    }
+
+    /// The effective onboarding step for input gating.
+    /// When a transient tip is showing, returns the step that was active
+    /// before the tip, so input restrictions from the parent step apply.
+    fn effective_step(&self) -> Option<&OnboardingStep> {
+        self.pre_tip_step.as_ref().or(self.onboarding_step.as_ref())
     }
 }
 
@@ -149,7 +314,12 @@ pub struct Orchestrator {
 
 impl Orchestrator {
     /// Create a new orchestrator and bind it to the given `AppHandle`.
-    fn new(app: AppHandle) -> Self {
+    fn new(app: AppHandle, cfg: &AppConfig) -> Self {
+        let hotkey_label = if cfg.hotkey == "option" {
+            "option".to_string()
+        } else {
+            "fn".to_string()
+        };
         Self {
             inner: Mutex::new(OrchestratorInner {
                 state: AppState::Idle,
@@ -158,6 +328,12 @@ impl Orchestrator {
                 recording_start: None,
                 ignore_pending_key_up: false,
                 app,
+                onboarding_step: None,
+                onboarding_complete: cfg.onboarding_complete,
+                pre_tip_step: None,
+                nice_context: None,
+                hold_confirm_start: None,
+                hotkey_label,
             }),
         }
     }
@@ -183,13 +359,79 @@ impl Orchestrator {
         if inner.state != AppState::Idle {
             return;
         }
+
+        // -- Onboarding input gating --
+        // Use effective_step so restrictions apply even during transient tips.
+        if let Some(eff_step) = inner.effective_step().cloned() {
+            match eff_step {
+                // Click-only and double-tap-only: fn key fully blocked
+                OnboardingStep::ClickTip | OnboardingStep::DoubleTapTip => {
+                    return;
+                }
+                // Confirmation steps: fn hold advances onboarding, never records
+                OnboardingStep::ApiTip | OnboardingStep::FormattingTip | OnboardingStep::Welcome => {
+                    log::info(&format!("Hold-to-confirm for: {:?}", eff_step));
+                    inner.hold_confirm_start = Some(Instant::now());
+                    // Emit a "pressed" event so the frontend can show scale-down feedback
+                    let _ = inner.app.emit("onboarding:press", true);
+                    #[cfg(target_os = "macos")]
+                    crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: true });
+                    let app = inner.app.clone();
+                    drop(inner);
+
+                    // After 0.6s hold, advance the step
+                    let orch = app.state::<Arc<Orchestrator>>();
+                    let orch = Arc::clone(&orch);
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(600));
+                        let mut inner = orch.inner.lock().unwrap();
+                        if let Some(start) = inner.hold_confirm_start {
+                            if start.elapsed().as_millis() >= 550 {
+                                inner.hold_confirm_start = None;
+                                let _ = inner.app.emit("onboarding:press", false);
+            #[cfg(target_os = "macos")]
+            crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
+                                play_sound(&inner.app, "Pop");
+                                drop(inner);
+                                // Small delay then advance
+                                std::thread::sleep(std::time::Duration::from_millis(400));
+                                orch.advance_onboarding_step();
+                            }
+                        }
+                    });
+                    return;
+                }
+                // .tryIt and others: dismiss any tip overlay, then record normally
+                _ => {
+                    drop(inner);
+                    self.dismiss_transient_tip();
+                    // Re-acquire lock after dismiss
+                    let mut inner = self.inner.lock().unwrap();
+                    if !inner.enabled || inner.state != AppState::Idle {
+                        return;
+                    }
+                    inner.state = AppState::Recording;
+                    inner.recording_start = Some(Instant::now());
+                    inner.peak_level = 0.0;
+                    inner.emit_state();
+                    drop(inner);
+                    self.start_audio_capture();
+                    return;
+                }
+            }
+        }
+
         inner.state = AppState::Recording;
         inner.recording_start = Some(Instant::now());
         inner.peak_level = 0.0;
         inner.emit_state();
         drop(inner);
 
-        // Start audio capture
+        self.start_audio_capture();
+    }
+
+    /// Internal helper to start audio capture (shared by on_key_down paths).
+    fn start_audio_capture(&self) {
         match audio::start_recording() {
             Ok(_path) => {
                 log::info("Recording started");
@@ -205,6 +447,8 @@ impl Orchestrator {
                 let mut inner = self.inner.lock().unwrap();
                 inner.state = AppState::Idle;
                 inner.emit_error(&format!("Recording failed: {e}"));
+                drop(inner);
+                self.restore_onboarding_if_needed();
             }
         }
     }
@@ -213,15 +457,21 @@ impl Orchestrator {
     pub fn on_key_up(&self) {
         let mut inner = self.inner.lock().unwrap();
 
-        // In hands-free mode, ignore a single key-up if we entered hands-free
-        // while the key was still held.
+        // Handle onboarding hold-to-confirm (released too early)
+        if inner.hold_confirm_start.is_some() {
+            inner.hold_confirm_start = None;
+            let _ = inner.app.emit("onboarding:press", false);
+            #[cfg(target_os = "macos")]
+            crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
+            return;
+        }
+
+        // In hands-free mode, key-up is always ignored. Hands-free recording
+        // can only be stopped via the dedicated stop button or pill click.
+        // The ignore_pending_key_up flag handles the initial key-up from the
+        // double-tap that entered hands-free mode.
         if inner.state == AppState::HandsFreeRecording || inner.state == AppState::HandsFreePaused {
-            if inner.ignore_pending_key_up {
-                inner.ignore_pending_key_up = false;
-                return;
-            }
-            drop(inner);
-            self.stop_hands_free_internal();
+            inner.ignore_pending_key_up = false;
             return;
         }
 
@@ -241,13 +491,15 @@ impl Orchestrator {
             duration, peak
         ));
 
-        // Too-short tap with low peak: cancel
+        // Too-short tap with low peak: show holdTip
         if duration < 0.5 && peak < 0.15 {
-            log::info("Too short / quiet -- cancelling");
+            log::info("Too short / quiet -- showing holdTip");
             let _ = audio::stop_recording(); // discard
-            let mut inner = self.inner.lock().unwrap();
-            inner.state = AppState::Idle;
-            inner.emit_error("Hold longer to record");
+            {
+                let mut inner = self.inner.lock().unwrap();
+                inner.state = AppState::Idle;
+            }
+            self.show_tip(OnboardingStep::HoldTip);
             return;
         }
 
@@ -261,6 +513,13 @@ impl Orchestrator {
             return;
         }
 
+        // Onboarding gating: only allow double-tap when onboarding is complete
+        // or we're on the doubleTapTip step.
+        let on_double_tap_tip = inner.effective_step() == Some(&OnboardingStep::DoubleTapTip);
+        if !inner.onboarding_complete && !on_double_tap_tip {
+            return;
+        }
+
         match inner.state {
             AppState::Recording => {
                 // Convert current hold-to-record into hands-free
@@ -270,12 +529,26 @@ impl Orchestrator {
                 log::info("Converted to hands-free recording");
             }
             AppState::Idle => {
-                // Start fresh hands-free recording
-                inner.state = AppState::Recording;
-                inner.recording_start = Some(Instant::now());
-                inner.peak_level = 0.0;
-                inner.emit_state();
-                drop(inner);
+                // Dismiss any transient tip overlay before starting
+                if on_double_tap_tip {
+                    drop(inner);
+                    self.dismiss_transient_tip();
+                    let mut inner = self.inner.lock().unwrap();
+                    if !inner.enabled {
+                        return;
+                    }
+                    inner.state = AppState::Recording;
+                    inner.recording_start = Some(Instant::now());
+                    inner.peak_level = 0.0;
+                    inner.emit_state();
+                    drop(inner);
+                } else {
+                    inner.state = AppState::Recording;
+                    inner.recording_start = Some(Instant::now());
+                    inner.peak_level = 0.0;
+                    inner.emit_state();
+                    drop(inner);
+                }
 
                 match audio::start_recording() {
                     Ok(_) => {
@@ -339,8 +612,26 @@ impl Orchestrator {
     /// Called when the user clicks the overlay pill.
     pub fn on_pill_click(&self) {
         let mut inner = self.inner.lock().unwrap();
+
         if !inner.enabled {
             return;
+        }
+
+        // Always allow clicks that control an active recording (stop hands-free,
+        // convert hold-to-record → hands-free). Only gate clicks that START a
+        // new recording from idle.
+        let is_active = matches!(
+            inner.state,
+            AppState::Recording | AppState::HandsFreeRecording | AppState::HandsFreePaused
+        );
+
+        if !is_active {
+            // Onboarding gating: only allow starting a new recording via click
+            // when onboarding is complete or we're on the clickTip step.
+            let on_click_tip = inner.effective_step() == Some(&OnboardingStep::ClickTip);
+            if !inner.onboarding_complete && !on_click_tip {
+                return;
+            }
         }
 
         match inner.state {
@@ -377,9 +668,8 @@ impl Orchestrator {
                 log::info("Pill click: converted to hands-free");
             }
             AppState::HandsFreeRecording | AppState::HandsFreePaused => {
-                // Stop current hands-free session
-                drop(inner);
-                self.stop_hands_free_internal();
+                // Ignore pill body clicks in hands-free mode.
+                // Only the dedicated stop/pause buttons control the session.
             }
             AppState::Processing => {
                 // Ignore clicks during processing
@@ -402,9 +692,38 @@ impl Orchestrator {
         let orch = app.state::<Arc<Orchestrator>>();
         start_hotkey_listener(Arc::clone(&orch), modifier);
 
-        // Notify frontend
-        let inner = self.inner.lock().unwrap();
-        let _ = inner.app.emit("settings:changed", ());
+        // Update hotkey label for onboarding cards
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.hotkey_label = if cfg.hotkey == "option" {
+                "option".to_string()
+            } else {
+                "fn".to_string()
+            };
+            // Re-emit onboarding if active (to update keycap labels)
+            if inner.onboarding_step.is_some() {
+                inner.emit_onboarding();
+            }
+        }
+
+        // Push appearance settings to the overlay
+        {
+            let inner = self.inner.lock().unwrap();
+            let _ = inner.app.emit("gradient:toggle", serde_json::json!({
+                "enabled": cfg.gradient_enabled,
+            }));
+            let _ = inner.app.emit("overlay:visibility", serde_json::json!({
+                "visible": cfg.always_visible_pill,
+            }));
+            let _ = inner.app.emit("settings:changed", ());
+
+            #[cfg(target_os = "macos")]
+            crate::sidecar::send(&crate::sidecar::OutMessage::Config {
+                gradient_enabled: cfg.gradient_enabled,
+                always_visible: cfg.always_visible_pill,
+                hotkey_label: inner.hotkey_label.clone(),
+            });
+        }
     }
 
     // -- Enable/disable toggle (from tray) --------------------------------
@@ -426,6 +745,225 @@ impl Orchestrator {
             inner.peak_level = levels.level;
         }
         inner.emit_levels(&levels);
+    }
+
+    // -- Onboarding flow ---------------------------------------------------
+
+    /// Start onboarding if the user hasn't completed it yet.
+    fn start_onboarding_if_needed(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.onboarding_complete {
+            return;
+        }
+        log::info("Starting onboarding");
+        inner.onboarding_step = Some(OnboardingStep::TryIt);
+        inner.emit_onboarding();
+    }
+
+    /// Advance from the current onboarding step to the next.
+    fn advance_onboarding_step(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        let step = inner.onboarding_step.clone();
+        log::info(&format!("Advancing onboarding from: {:?}", step));
+
+        match step.as_ref() {
+            Some(OnboardingStep::DoubleTapTip) => {
+                // Fallback; normally double-tap triggers click -> apiTip
+                inner.onboarding_step = Some(OnboardingStep::ApiTip);
+                inner.emit_onboarding();
+            }
+            Some(OnboardingStep::ClickTip) => {
+                inner.onboarding_step = Some(OnboardingStep::ApiTip);
+                inner.emit_onboarding();
+            }
+            Some(OnboardingStep::ApiTip) => {
+                inner.onboarding_step = Some(OnboardingStep::FormattingTip);
+                inner.emit_onboarding();
+            }
+            Some(OnboardingStep::FormattingTip) => {
+                inner.onboarding_step = Some(OnboardingStep::Welcome);
+                inner.emit_onboarding();
+            }
+            Some(OnboardingStep::Welcome) => {
+                drop(inner);
+                self.finalize_onboarding();
+            }
+            _ => {
+                drop(inner);
+                self.finalize_onboarding();
+            }
+        }
+    }
+
+    /// Mark onboarding as complete and persist to config.
+    fn finalize_onboarding(&self) {
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.onboarding_complete = true;
+            inner.onboarding_step = None;
+            inner.pre_tip_step = None;
+            inner.nice_context = None;
+            inner.emit_onboarding();
+        }
+        let _ = config::update(|cfg| {
+            cfg.onboarding_complete = true;
+        });
+        log::info("Onboarding finalized");
+    }
+
+    /// Show a transient tip (speakTip or holdTip). These auto-dismiss after 2.5s.
+    fn show_tip(&self, tip: OnboardingStep) {
+        // Capture the current step before overwriting
+        let mut inner = self.inner.lock().unwrap();
+        let pre_tip = inner.onboarding_step.clone();
+        inner.pre_tip_step = pre_tip.clone();
+        inner.state = AppState::Idle;
+        inner.onboarding_step = Some(tip.clone());
+        inner.emit_state();
+        // Emit noSpeech mode first so the frontend shows the shake + flat bars
+        let _ = inner.app.emit("state:change", StateChangePayload {
+            state: "noSpeech".to_string(),
+            hands_free: None,
+            paused: None,
+            elapsed: None,
+        });
+        inner.emit_onboarding();
+
+        let app = inner.app.clone();
+        let onboarding_complete = inner.onboarding_complete;
+        drop(inner);
+
+        // Auto-dismiss after 2.5s
+        let orch = app.state::<Arc<Orchestrator>>();
+        let orch = Arc::clone(&orch);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(2500));
+            let mut inner = orch.inner.lock().unwrap();
+            // Only dismiss if we're still showing this exact tip
+            if inner.onboarding_step.as_ref() == Some(&tip) {
+                inner.pre_tip_step = None;
+                if onboarding_complete {
+                    // Post-onboarding: just clear
+                    inner.onboarding_step = None;
+                    // Return to idle
+                    let _ = inner.app.emit("state:change", StateChangePayload {
+                        state: "idle".to_string(),
+                        hands_free: None,
+                        paused: None,
+                        elapsed: None,
+                    });
+                    inner.emit_onboarding();
+                } else {
+                    // During onboarding: restore to the pre-tip step
+                    let restore_to = match pre_tip.as_ref() {
+                        Some(OnboardingStep::ClickTip) => OnboardingStep::ClickTip,
+                        Some(OnboardingStep::DoubleTapTip) => OnboardingStep::DoubleTapTip,
+                        _ => OnboardingStep::TryIt,
+                    };
+                    // Brief delay, then restore
+                    let _ = inner.app.emit("state:change", StateChangePayload {
+                        state: "idle".to_string(),
+                        hands_free: None,
+                        paused: None,
+                        elapsed: None,
+                    });
+                    inner.onboarding_step = Some(restore_to);
+                    inner.emit_onboarding();
+                }
+            }
+        });
+    }
+
+    /// Dismiss any currently-showing transient tip and restore the previous step.
+    fn dismiss_transient_tip(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        let is_tip = matches!(
+            inner.onboarding_step,
+            Some(OnboardingStep::SpeakTip) | Some(OnboardingStep::HoldTip)
+        );
+        if !is_tip {
+            return;
+        }
+        if inner.onboarding_complete {
+            inner.onboarding_step = None;
+        } else {
+            let restore = inner.pre_tip_step.clone().unwrap_or(OnboardingStep::TryIt);
+            inner.onboarding_step = Some(restore);
+        }
+        inner.pre_tip_step = None;
+        inner.emit_onboarding();
+    }
+
+    /// After a successful transcription+paste during onboarding, show the
+    /// "nice" celebration and then advance to the next step.
+    fn on_successful_paste_onboarding(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.onboarding_complete {
+            return;
+        }
+
+        let next_step = match inner.onboarding_step.as_ref() {
+            Some(OnboardingStep::TryIt) => Some(OnboardingStep::DoubleTapTip),
+            Some(OnboardingStep::DoubleTapTip) => Some(OnboardingStep::ClickTip),
+            Some(OnboardingStep::ClickTip) => Some(OnboardingStep::ApiTip),
+            _ => None,
+        };
+
+        if let Some(next) = next_step {
+            inner.nice_context = Some(NiceContext { next_step: next });
+            inner.onboarding_step = Some(OnboardingStep::Nice);
+            inner.emit_onboarding();
+            play_sound(&inner.app, "Submarine");
+
+            let app = inner.app.clone();
+            drop(inner);
+
+            // After 1.5s, advance from nice to the next step
+            let orch = app.state::<Arc<Orchestrator>>();
+            let orch = Arc::clone(&orch);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(1500));
+                let mut inner = orch.inner.lock().unwrap();
+                if inner.onboarding_step == Some(OnboardingStep::Nice) {
+                    if let Some(ctx) = inner.nice_context.take() {
+                        inner.onboarding_step = Some(ctx.next_step);
+                        inner.emit_onboarding();
+                    }
+                }
+            });
+        }
+    }
+
+    /// Restore onboarding card after an error auto-dismisses or processing finishes.
+    fn restore_onboarding_if_needed(&self) {
+        let inner = self.inner.lock().unwrap();
+        if inner.onboarding_complete {
+            return;
+        }
+        let step = inner.onboarding_step.clone();
+        let app = inner.app.clone();
+        drop(inner);
+
+        // Only restore if we're in a step that should bounce back
+        let restore_to = match step.as_ref() {
+            Some(OnboardingStep::TryIt)
+            | Some(OnboardingStep::SpeakTip)
+            | Some(OnboardingStep::HoldTip) => Some(OnboardingStep::TryIt),
+            Some(OnboardingStep::ClickTip) => Some(OnboardingStep::ClickTip),
+            Some(OnboardingStep::DoubleTapTip) => Some(OnboardingStep::DoubleTapTip),
+            _ => None,
+        };
+
+        if let Some(target) = restore_to {
+            let orch = app.state::<Arc<Orchestrator>>();
+            let orch = Arc::clone(&orch);
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                let mut inner = orch.inner.lock().unwrap();
+                inner.onboarding_step = Some(target);
+                inner.emit_onboarding();
+            });
+        }
     }
 
     // -- Core pipeline (stop recording, transcribe, format, paste) --------
@@ -450,20 +988,22 @@ impl Orchestrator {
 
         play_sound(&self.app_handle(), "Pop");
 
-        // Silence check
+        // Silence check — show speakTip instead of generic error
         if peak < 0.15 {
             log::info(&format!("Silence detected (peak {:.3}) -- skipping", peak));
-            let mut inner = self.inner.lock().unwrap();
-            inner.state = AppState::Idle;
-            inner.emit_error("No speech detected");
+            {
+                let mut inner = self.inner.lock().unwrap();
+                inner.state = AppState::Idle;
+            }
+            self.show_tip(OnboardingStep::SpeakTip);
             return;
         }
 
         let cfg = config::get();
 
-        // Pre-flight: check that a transcription provider + API key are configured
-        if cfg.tx_provider == TranscriptionProvider::None || cfg.tx_api_key.is_empty() {
-            log::info("No transcription provider or API key configured");
+        // Pre-flight: API providers require an API key. On-device (None) doesn't.
+        if cfg.tx_provider != TranscriptionProvider::None && cfg.tx_api_key.is_empty() {
+            log::info("No API key configured for transcription provider");
             let app = self.app_handle();
             let mut inner = self.inner.lock().unwrap();
             inner.state = AppState::Idle;
@@ -524,17 +1064,34 @@ impl Orchestrator {
                     }
 
                     // Return to idle
-                    let mut inner = orch.inner.lock().unwrap();
-                    inner.state = AppState::Idle;
-                    inner.emit_state();
+                    {
+                        let mut inner = orch.inner.lock().unwrap();
+                        inner.state = AppState::Idle;
+                        inner.emit_state();
+                    }
+
+                    // Trigger onboarding celebration + advancement if applicable
+                    if !text.is_empty() {
+                        orch.on_successful_paste_onboarding();
+                    } else {
+                        orch.restore_onboarding_if_needed();
+                    }
                 }
                 Err(e) => {
                     log::info(&format!("Pipeline error: {e}"));
+                    play_sound(&orch.app_handle(), "Pop");
                     // Set internal state to idle but show error to frontend.
                     // Frontend auto-dismisses the error back to idle after 2s.
                     let mut inner = orch.inner.lock().unwrap();
                     inner.state = AppState::Idle;
                     inner.emit_error(&classify_error(&e));
+                    drop(inner);
+                    // After error auto-dismisses, restore onboarding
+                    let orch2 = Arc::clone(&orch);
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(2500));
+                        orch2.restore_onboarding_if_needed();
+                    });
                 }
             }
         });
@@ -570,6 +1127,22 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
     let use_oneshot = cfg.tx_provider == TranscriptionProvider::Gemini
         && cfg.fmt_provider == FormattingProvider::Gemini
         && cfg.tx_provider.can_also_format();
+
+    // Apple Speech pre-check: before calling expensive API providers, run a
+    // quick on-device check to confirm speech exists in the audio. This saves
+    // API costs on silence/noise that slipped past the peak-level gate.
+    if cfg.tx_provider != TranscriptionProvider::None {
+        let check_path = wav_path.clone();
+        let has_speech = tokio::task::spawn_blocking(move || {
+            crate::speech::pre_check(&check_path)
+        })
+        .await
+        .unwrap_or(true); // if the task panics, proceed anyway
+
+        if !has_speech {
+            return Err("No speech detected".to_string());
+        }
+    }
 
     let raw_text = if use_oneshot {
         log::info("One-shot: Gemini transcribe+format");
@@ -746,6 +1319,7 @@ fn start_level_poller(orch: Arc<Orchestrator>) {
         .expect("failed to spawn level poller thread");
 }
 
+
 // ---------------------------------------------------------------------------
 // Initialization (called from lib.rs setup)
 // ---------------------------------------------------------------------------
@@ -761,7 +1335,7 @@ pub fn init(app: &AppHandle) {
     let cfg = config::get();
 
     // Create orchestrator and store as managed state
-    let orch = Arc::new(Orchestrator::new(app.clone()));
+    let orch = Arc::new(Orchestrator::new(app.clone(), &cfg));
     app.manage(Arc::clone(&orch));
 
     // Set up system tray
@@ -775,73 +1349,66 @@ pub fn init(app: &AppHandle) {
     // Start audio level poller
     start_level_poller(Arc::clone(&orch));
 
-    // Show overlay window (always-visible pill in idle state)
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        // Position at bottom-center of primary monitor
-        if let Ok(monitor) = overlay.primary_monitor() {
-            if let Some(monitor) = monitor {
-                let screen = monitor.size();
-                let scale = monitor.scale_factor();
-                let win_w = 1200.0;
-                let win_h = 350.0;
-                let x = ((screen.width as f64 / scale) - win_w) / 2.0;
-                let y = (screen.height as f64 / scale) - win_h;
-                let _ = overlay.set_position(tauri::PhysicalPosition::new(
-                    (x * scale) as i32,
-                    (y * scale) as i32,
-                ));
-                log::info(&format!("Overlay positioned at {},{} (screen {}x{}, scale {})", x as i32, y as i32, screen.width, screen.height, scale));
-            }
+    // -- Overlay setup: native sidecar on macOS, WebView on Windows --
+
+    #[cfg(target_os = "macos")]
+    {
+        // Close the WebView overlay — macOS uses the native sidecar instead.
+        // The window is defined in tauri.conf.json (needed for Windows) but
+        // we don't need it on macOS.
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            let _ = overlay.destroy();
         }
-        // Set macOS-specific window behaviors so the overlay:
-        // - Appears on ALL desktops/Spaces (canJoinAllSpaces)
-        // - Doesn't animate with Mission Control (stationary)
-        // - Can appear alongside full-screen apps (fullScreenAuxiliary)
-        #[cfg(target_os = "macos")]
-        {
-            if let Ok(ns_win) = overlay.ns_window() {
-                unsafe {
-                    use objc2::msg_send;
-                    use objc2::runtime::{AnyClass, AnyObject};
 
-                    let win = ns_win as *mut AnyObject;
+        // Spawn native Swift overlay sidecar (NSPanel + SwiftUI)
+        crate::sidecar::spawn(app);
 
-                    // NSWindowCollectionBehavior:
-                    //   canJoinAllSpaces = 1, stationary = 16, fullScreenAuxiliary = 256
-                    let behavior: u64 = 1 | 16 | 256;
-                    let _: () = msg_send![win, setCollectionBehavior: behavior];
+        // The sidecar sends "ready" once it's initialized.
+        // Start onboarding after a short delay to ensure it's up.
+        let orch2 = Arc::clone(&orch);
+        std::thread::Builder::new()
+            .name("yap-sidecar-wait".into())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                log::info("Sidecar overlay assumed ready -- starting onboarding check");
+                orch2.start_onboarding_if_needed();
+            })
+            .ok();
+    }
 
-                    // Window level: status (25) for proper always-on-top
-                    let _: () = msg_send![win, setLevel: 25_i64];
-
-                    // Force NSWindow background to fully transparent
-                    let ns_color_class = AnyClass::get(c"NSColor").unwrap();
-                    let clear_color: *mut AnyObject = msg_send![ns_color_class, clearColor];
-                    let _: () = msg_send![win, setBackgroundColor: clear_color];
-
-                    // Disable window shadow entirely
-                    let _: () = msg_send![win, setHasShadow: false];
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Show WebView overlay window (Windows/Linux)
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            if let Ok(monitor) = overlay.primary_monitor() {
+                if let Some(monitor) = monitor {
+                    let screen = monitor.size();
+                    let scale = monitor.scale_factor();
+                    let win_w = 660.0;
+                    let win_h = 200.0;
+                    let x = ((screen.width as f64 / scale) - win_w) / 2.0;
+                    let y = (screen.height as f64 / scale) - win_h;
+                    let _ = overlay.set_position(tauri::PhysicalPosition::new(
+                        (x * scale) as i32,
+                        (y * scale) as i32,
+                    ));
+                    log::info(&format!("Overlay positioned at {},{} (screen {}x{}, scale {})", x as i32, y as i32, screen.width, screen.height, scale));
                 }
-                log::info("Overlay: set transparent bg, no shadow, all Spaces, stationary");
             }
+            let _ = overlay.show();
+            log::info("Overlay window shown");
+        } else {
+            log::info("WARNING: overlay window not found");
         }
 
-        let _ = overlay.show();
-        log::info("Overlay window shown");
-    } else {
-        log::info("WARNING: overlay window not found");
+        let orch2 = Arc::clone(&orch);
+        app.listen("overlay:ready", move |_| {
+            log::info("Overlay ready -- starting onboarding check");
+            orch2.start_onboarding_if_needed();
+        });
     }
 
     log::info("Orchestrator initialized -- ready");
-
-    // First-launch: if no API key is configured, open settings automatically
-    if cfg.tx_api_key.is_empty() {
-        log::info("No API key configured -- opening settings");
-        if let Some(settings_win) = app.get_webview_window("settings") {
-            let _ = settings_win.show();
-            let _ = settings_win.set_focus();
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

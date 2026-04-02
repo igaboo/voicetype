@@ -116,10 +116,15 @@ fn resolve_model(model: &str, provider: TranscriptionProvider) -> String {
 // Provider implementations
 // ---------------------------------------------------------------------------
 
-async fn transcribe_on_device(_audio_path: &Path) -> Result<String, String> {
-    // On-device transcription is handled natively by the frontend/OS layer.
-    // This Rust backend cannot directly invoke SFSpeechRecognizer or System.Speech.
-    Err("on-device transcription not yet implemented".into())
+async fn transcribe_on_device(audio_path: &Path) -> Result<String, String> {
+    // Delegate to the platform-native speech recognition module.
+    // On macOS this uses SFSpeechRecognizer; on other platforms it returns an error.
+    let path = audio_path.to_path_buf();
+    let locale = crate::config::get().speech_recognition_locale();
+    // Run on a blocking thread since the native API uses synchronous channel waiting.
+    tokio::task::spawn_blocking(move || crate::speech::transcribe(&path, &locale))
+        .await
+        .map_err(|e| format!("speech task panicked: {e}"))?
 }
 
 async fn transcribe_gemini(

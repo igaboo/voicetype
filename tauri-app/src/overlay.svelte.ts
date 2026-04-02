@@ -1,6 +1,5 @@
 import { mount } from 'svelte';
 import { listen } from '@tauri-apps/api/event';
-import { getCurrentWindow } from '@tauri-apps/api/window';
 import Overlay from './lib/overlay/Overlay.svelte';
 
 // Reactive state shared with the Svelte component via object reference
@@ -18,6 +17,8 @@ const overlayState = $state({
   handsFreeElapsed: 0,
   hotkeyLabel: 'fn',
   visible: true,
+  celebrating: false,
+  onboardingPressed: false,
 });
 
 // Mount the Overlay component
@@ -57,13 +58,25 @@ listen<{ state: string; handsFree?: boolean; paused?: boolean; elapsed?: number 
 listen<{ step: string; text: string; hotkeyLabel?: string }>(
   'onboarding:step',
   (event) => {
-    overlayState.onboardingStep = event.payload.step;
+    const prevStep = overlayState.onboardingStep;
+    overlayState.onboardingStep = event.payload.step || null;
     overlayState.onboardingText = event.payload.text;
     if (event.payload.hotkeyLabel) {
       overlayState.hotkeyLabel = event.payload.hotkeyLabel;
     }
+    // Trigger celebration animation when entering 'nice' step
+    if (event.payload.step === 'nice' && prevStep !== 'nice') {
+      overlayState.celebrating = true;
+      setTimeout(() => {
+        overlayState.celebrating = false;
+      }, 3000);
+    }
   }
 );
+
+listen<boolean>('onboarding:press', (event) => {
+  overlayState.onboardingPressed = event.payload;
+});
 
 listen<{ message: string }>('error:show', (event) => {
   overlayState.mode = 'error';
@@ -79,20 +92,7 @@ listen<{ visible: boolean }>('overlay:visibility', (event) => {
   overlayState.alwaysVisible = event.payload.visible;
 });
 
-// ── Click-Through Management ───────────────────────────────────────────
-
-const appWindow = getCurrentWindow();
-
-// Start with click-through enabled so the overlay doesn't block interaction.
-// forward: true is required on macOS so mouse events still reach the WebView
-// (without it, mouseenter/mouseleave won't fire and the pill is unclickable).
-appWindow.setIgnoreCursorEvents(true, { forward: true });
-
-// The pill element dispatches custom events to toggle click-through
-window.addEventListener('pill:mouseenter', () => {
-  appWindow.setIgnoreCursorEvents(false);
-});
-
-window.addEventListener('pill:mouseleave', () => {
-  appWindow.setIgnoreCursorEvents(true, { forward: true });
-});
+// Signal the backend that all event listeners are registered and the
+// overlay is ready to receive events (e.g. onboarding steps).
+import { emit } from '@tauri-apps/api/event';
+emit('overlay:ready');

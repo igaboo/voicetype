@@ -1,0 +1,50 @@
+Yap Multi-Platform Release — TODO
+==================================
+
+DONE (this session)
+-------------------
+[x] Native Swift overlay sidecar for macOS (NSPanel + SwiftUI)
+[x] IPC protocol (stdin/stdout newline-delimited JSON)
+[x] Sidecar build script (build-sidecar.sh) + build.rs integration
+[x] Platform-specific Tauri configs (tauri.macos.conf.json)
+[x] Deleted all legacy hover tracking code (event monitors, pill bounds, etc.)
+[x] WebView overlay destroyed on macOS at startup (clean build)
+[x] Sidecar binary bundled in Contents/MacOS/ via externalBin
+
+BEFORE RELEASE — macOS
+----------------------
+[ ] Full pipeline end-to-end test: hotkey → record → transcribe → format → paste
+[ ] Test all overlay states: idle, recording, processing, noSpeech, error
+[ ] Test onboarding flow through sidecar
+[ ] Test hands-free: pause, resume, stop, elapsed timer
+[ ] Test settings changes propagating to sidecar (gradient, visibility, hotkey)
+[ ] Code signing: verify sidecar binary gets signed in release builds
+[ ] Universal binary (arm64 + x86_64) for Intel Mac support
+[ ] CI/CD: GitHub Actions macOS runner needs Xcode/Swift for sidecar build
+
+BEFORE RELEASE — Windows
+-------------------------
+[ ] Test basic pipeline: hotkey → record → transcribe → format → paste
+[ ] Test WebView overlay (recording, processing, error states)
+[ ] Hover/click-through will NOT work on Windows WebView — document as known limitation
+[ ] CI/CD: GitHub Actions Windows runner build test
+
+FUTURE — Windows overlay sidecar
+---------------------------------
+[ ] Research: native Windows overlay approaches
+    - Win32 layered windows (WS_EX_LAYERED + WS_EX_TRANSPARENT) with per-pixel hit-testing
+    - DirectComposition + Direct2D for GPU-accelerated transparent overlay
+    - Rust windows-rs crate can do all of this natively
+    - WisprFlow uses Electron on Windows (same overlay limitations, no native sidecar)
+[ ] Build native Windows overlay sidecar (Rust + windows-rs or C++)
+    - Same IPC protocol as macOS sidecar (stdin/stdout JSON)
+    - Win32 HWND with WS_EX_LAYERED | WS_EX_TOPMOST
+    - Per-pixel alpha for click-through on transparent areas
+    - WM_MOUSEMOVE / TrackMouseEvent for hover detection
+[ ] Remove WebView overlay dependency on Windows once native sidecar ships
+
+FUTURE — General
+----------------
+[ ] Remove overlay window from tauri.conf.json entirely once both platforms have native sidecars
+[ ] Consider single Rust sidecar binary (cross-platform) instead of Swift + future Windows binary
+[ ] Investigate: could the Rust sidecar use platform-native rendering (AppKit on macOS, Win32 on Windows)?

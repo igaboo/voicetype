@@ -5,6 +5,8 @@ mod history;
 mod hotkey;
 mod orchestrator;
 mod paste;
+mod sidecar;
+mod speech;
 mod transcription;
 mod tray;
 

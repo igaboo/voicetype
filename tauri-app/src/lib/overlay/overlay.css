@@ -49,8 +49,8 @@
   position: fixed;
   bottom: 0;
   left: 0;
-  width: 1200px;
-  height: 350px;
+  width: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -129,7 +129,8 @@
 }
 
 .pill.expanded.hands-free {
-  padding: 6px 7px;
+  padding: 8px 10px;
+  gap: 10px;
 }
 
 .pill.minimized {
@@ -171,22 +172,16 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 124px;
-  height: 28px;
+  gap: 10px;
+  height: 32px;
   position: relative;
   z-index: 1;
 }
 
-.hands-free-controls .bars-container {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-}
-
 .btn-action {
-  position: absolute;
-  width: 26px;
-  height: 26px;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
   border-radius: 50%;
   border: none;
   display: flex;
@@ -198,21 +193,19 @@
     transform 350ms var(--transition-spring),
     opacity 200ms ease;
   z-index: 2;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1;
 }
 
 .btn-pause {
   background: rgba(255, 255, 255, 0.15);
   color: rgba(255, 255, 255, 0.9);
-  left: calc(50% - 49px - 13px);
 }
 
 .btn-stop {
-  background: rgba(255, 0, 0, 0.85);
+  background: rgba(255, 59, 48, 0.9);
   color: white;
-  left: calc(50% + 49px - 13px);
-  font-size: 11px;
+  font-size: 12px;
 }
 
 .btn-action:hover {
@@ -223,26 +216,11 @@
   transform: scale(0.95);
 }
 
-/* ── Error Content ──────────────────────────────────────────────────── */
-
-.error-content {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  z-index: 1;
-  white-space: nowrap;
-}
+/* ── Error Icon (used inside error cards) ───────────────────────────── */
 
 .error-icon {
   color: #ff4444;
   font-size: 12px;
-}
-
-.error-message {
-  font-size: 11px;
-  font-weight: 500;
-  color: white;
-  line-height: 1;
 }
 
 /* ── Onboarding Card ────────────────────────────────────────────────── */
@@ -278,6 +256,21 @@
   font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Rounded', 'Helvetica Neue', sans-serif;
 }
 
+/* Nice / celebration card — slightly larger text */
+.onboarding-card.nice-card {
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Error card — uses same card component as onboarding */
+.onboarding-card.error-card {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.onboarding-card.error-card .error-icon {
+  color: #ff6b6b;
+}
+
 /* ── Elapsed Timer ──────────────────────────────────────────────────── */
 
 .elapsed-timer {
@@ -287,37 +280,6 @@
   color: rgba(255, 255, 255, 0.5);
   pointer-events: none;
   z-index: 1;
-}
-
-/* ── Hover Tooltip ──────────────────────────────────────────────────── */
-
-.tooltip {
-  position: absolute;
-  bottom: calc(100% + 6px);
-  font-size: 13px;
-  font-weight: 600;
-  color: white;
-  white-space: nowrap;
-  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
-  pointer-events: none;
-  z-index: 1;
-}
-
-/* ── Hover Mic Icon ─────────────────────────────────────────────────── */
-
-.hover-mic {
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1;
-}
-
-.hover-mic svg {
-  width: 16px;
-  height: 16px;
-  fill: rgba(255, 255, 255, 0.9);
 }
 
 /* ── Hold Prompt ────────────────────────────────────────────────────── */

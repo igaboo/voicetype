@@ -54,10 +54,14 @@ dirs = "5"
 # Lazy statics
 once_cell = "1"
 
+# Random selection (for onboarding nice messages)
+rand = "0.9"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-graphics = "0.24"
 objc2 = "0.6"
+block2 = "0.6"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = ["Win32_UI_Input_KeyboardAndMouse", "Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_Threading"] }

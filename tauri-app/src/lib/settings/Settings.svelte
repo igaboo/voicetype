@@ -35,6 +35,7 @@
     gradientEnabled: boolean;
     alwaysVisiblePill: boolean;
     historyEnabled: boolean;
+    speechLocale: string;
   }
 
   // ── Provider Metadata ─────────────────────────────────────────────────
@@ -57,17 +58,17 @@
 
   const txDefaultModels: Record<string, string> = {
     none: '',
-    gemini: 'gemini-2.0-flash',
-    openai: 'whisper-1',
-    deepgram: 'nova-2',
+    gemini: 'gemini-2.5-flash',
+    openai: 'gpt-4o-transcribe',
+    deepgram: 'nova-3',
     elevenlabs: 'scribe_v1',
   };
 
   const fmtDefaultModels: Record<string, string> = {
     none: '',
-    gemini: 'gemini-2.0-flash',
+    gemini: 'gemini-2.5-flash',
     openai: 'gpt-4o-mini',
-    anthropic: 'claude-sonnet-4-20250514',
+    anthropic: 'claude-haiku-4-5-20251001',
     groq: 'llama-3.3-70b-versatile',
   };
 
@@ -182,6 +183,7 @@
       gradientEnabled = cfg.gradientEnabled;
       alwaysVisiblePill = cfg.alwaysVisiblePill;
       historyEnabled = cfg.historyEnabled;
+      speechLocale = cfg.speechLocale;
 
       // Determine if formatting shares the transcription key
       fmtUseSameKey = cfg.fmtApiKey === '' || cfg.fmtApiKey === cfg.txApiKey;
@@ -228,6 +230,7 @@
         gradientEnabled,
         alwaysVisiblePill,
         historyEnabled,
+        speechLocale,
       };
 
       await invoke('save_config', { cfg });
@@ -745,18 +748,6 @@
               bind:value={speechLocale}
             />
             <span class="field-description">BCP 47 locale for on-device speech recognition (e.g. en-US, ja-JP, fr-FR).</span>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div style="display: flex; align-items: center; justify-content: space-between;">
-            <div>
-              <span class="field-label">Reset onboarding</span>
-              <div class="field-description" style="margin-top: 2px;">Show the welcome tutorial again on next launch</div>
-            </div>
-            <button class="btn btn-secondary" onclick={resetOnboarding} type="button">
-              Reset
-            </button>
           </div>
         </div>
       </div>

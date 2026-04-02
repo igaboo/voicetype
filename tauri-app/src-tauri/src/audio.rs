@@ -332,11 +332,6 @@ pub fn get_levels() -> AudioLevels {
         .unwrap_or_default()
 }
 
-/// Get the peak level observed during the current (or last) recording.
-pub fn get_peak_level() -> f32 {
-    PEAK_LEVEL.lock().ok().map(|p| *p).unwrap_or(0.0)
-}
-
 /// List available audio input devices by name.
 pub fn list_devices() -> Vec<String> {
     let host = cpal::default_host();

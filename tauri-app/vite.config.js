@@ -20,8 +20,15 @@ const standalonePages = ["overlay", "settings", "history"];
  *   each standalone page into the same output directory (../build).
  */
 function tauriMultiWindow() {
+  let isBuild = false;
+
   return {
     name: "tauri-multi-window",
+
+    /** @param {import('vite').ResolvedConfig} config */
+    configResolved(config) {
+      isBuild = config.command === "build";
+    },
 
     /** @param {import('vite').ViteDevServer} server */
     configureServer(server) {
@@ -45,6 +52,9 @@ function tauriMultiWindow() {
 
     /** After the SvelteKit build, run a second Vite build for standalone pages. */
     async closeBundle() {
+      // Only build standalone pages during production builds, not dev server
+      if (!isBuild) return;
+
       const input = Object.fromEntries(
         standalonePages.map((p) => [p, resolve("src", `${p}.html`)])
       );

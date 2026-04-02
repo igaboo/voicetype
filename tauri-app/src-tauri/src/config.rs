@@ -89,6 +89,22 @@ pub struct AppConfig {
     /// Persist transcription history to disk
     #[serde(default = "default_true")]
     pub history_enabled: bool,
+
+    /// BCP 47 locale for on-device speech recognition (e.g. "en-US", "ja-JP").
+    /// Empty string defaults to "en-US".
+    #[serde(default)]
+    pub speech_locale: String,
+}
+
+impl AppConfig {
+    /// Resolved speech recognition locale (defaults to "en-US" if empty).
+    pub fn speech_recognition_locale(&self) -> String {
+        if self.speech_locale.is_empty() {
+            "en-US".to_string()
+        } else {
+            self.speech_locale.clone()
+        }
+    }
 }
 
 // ---- serde default helpers ------------------------------------------------
@@ -126,6 +142,7 @@ impl Default for AppConfig {
             gradient_enabled: true,
             always_visible_pill: true,
             history_enabled: true,
+            speech_locale: String::new(),
         }
     }
 }

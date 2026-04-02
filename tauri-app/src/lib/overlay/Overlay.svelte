@@ -15,7 +15,6 @@
    *   - Hover tooltip in idle state
    *   - Elapsed timer during recording
    *   - Lava lamp gradient background
-   *   - Click-through toggle via custom events
    */
 
   import './overlay.css';
@@ -36,13 +35,14 @@
     handsFreeElapsed: number;
     hotkeyLabel: string;
     visible: boolean;
+    celebrating: boolean;
+    onboardingPressed: boolean;
   }
 
   let { overlayData }: { overlayData: OverlayData } = $props();
 
   // ── Local State ────────────────────────────────────────────────────────
 
-  let hovering = $state(false);
   let isPressed = $state(false);
   let shaking = $state(false);
   let slideVisible = $state<'in' | 'out' | 'none'>('none');
@@ -69,7 +69,6 @@
       case 'recording': return 1.0;
       case 'processing': return 0.6;
       default:
-        if (hovering) return 0.15;
         return overlayData.onboardingStep ? 0.3 : 0.4;
     }
   });
@@ -89,14 +88,15 @@
   // Pill scale factor
   let pillScale = $derived.by(() => {
     if (isExpanded) return 0.75;
-    return hovering ? 0.72 : 0.65;
+    return 0.65;
   });
 
   // Combined transform for the pill
   let pillTransform = $derived.by(() => {
     const processingScale = overlayData.mode === 'processing' ? 0.85 : 1.0;
     const pressScale = isPressed ? 0.85 : 1.0;
-    const scale = pillScale * audioBounceFactor * pressScale * processingScale;
+    const confirmScale = confirmPressed ? 0.85 : 1.0;
+    const scale = pillScale * audioBounceFactor * pressScale * processingScale * confirmScale;
     const offsetY = isExpanded ? 0 : 15;
     return `scale(${scale}) translateY(${offsetY}px)`;
   });
@@ -111,6 +111,9 @@
   let holdPromptText = $derived(
     overlayData.onboardingStep === 'welcome' ? 'to finish' : 'to continue'
   );
+
+  // Whether the pill is in hold-to-confirm pressed state (scale-down feedback)
+  let confirmPressed = $derived(overlayData.onboardingPressed);
 
   // ── Shake Animation ────────────────────────────────────────────────────
 
@@ -142,10 +145,6 @@
 
     if (currentMode === 'noSpeech' && prevMode !== 'noSpeech') {
       triggerShake();
-    }
-
-    if (currentMode !== 'idle') {
-      hovering = false;
     }
 
     // Slide in when becoming active
@@ -182,22 +181,12 @@
     };
   });
 
-  // ── Click-Through Dispatch ─────────────────────────────────────────────
-
-  function onPillMouseEnter() {
-    window.dispatchEvent(new CustomEvent('pill:mouseenter'));
-    if (isMinimized) {
-      hovering = true;
-    }
-  }
-
-  function onPillMouseLeave() {
-    window.dispatchEvent(new CustomEvent('pill:mouseleave'));
-    hovering = false;
-  }
+  // ── Event Handlers ─────────────────────────────────────────────────────
 
   function onPillClick() {
-    if (overlayData.mode !== 'recording' && overlayData.mode !== 'processing') {
+    // Don't send pill clicks during processing or hands-free (only
+    // the dedicated stop/pause buttons control hands-free sessions).
+    if (overlayData.mode !== 'processing' && !overlayData.isHandsFree) {
       import('@tauri-apps/api/core').then(({ invoke }) => {
         invoke('pill_clicked');
       });
@@ -232,6 +221,7 @@
   <LavaLamp
     energy={gradientEnergy}
     visible={showGradient}
+    celebrating={overlayData.celebrating}
   />
 
   <!-- Vertical stack: onboarding card, timer, pill -->
@@ -242,8 +232,20 @@
   >
     <!-- Onboarding card (above pill) -->
     {#if overlayData.onboardingText && overlayData.onboardingStep && (overlayData.mode === 'idle' || overlayData.mode === 'noSpeech')}
-      <div class="onboarding-card animate-card-enter">
-        {@html overlayData.onboardingText}
+      {#key overlayData.onboardingStep}
+        <div
+          class="onboarding-card animate-card-enter"
+          class:nice-card={overlayData.onboardingStep === 'nice'}
+        >
+          {@html overlayData.onboardingText}
+        </div>
+      {/key}
+    {/if}
+
+    <!-- Error card (above pill, same style as onboarding) -->
+    {#if overlayData.mode === 'error' && overlayData.errorMessage}
+      <div class="onboarding-card error-card animate-card-enter">
+        <span class="error-icon">&#9888;</span> {overlayData.errorMessage}
       </div>
     {/if}
 
@@ -268,12 +270,10 @@
       class:hands-free={overlayData.isHandsFree}
       style="
         transform: {pillTransform} translateX({shakeOffset}px);
-        opacity: {isPressed ? 0.7 : 1};
+        opacity: {isPressed || confirmPressed ? 0.7 : 1};
       "
       role="status"
       aria-label="Yap overlay"
-      onmouseenter={onPillMouseEnter}
-      onmouseleave={onPillMouseLeave}
       onclick={onPillClick}
       onpointerdown={onPillPointerDown}
       onpointerup={onPillPointerUp}
@@ -290,11 +290,12 @@
           <span>{holdPromptText}</span>
         </div>
       {:else if overlayData.mode === 'error'}
-        <!-- Error state -->
-        <div class="error-content">
-          <span class="error-icon">&#9888;</span>
-          <span class="error-message">{overlayData.errorMessage}</span>
-        </div>
+        <!-- Error state — show flat bars in pill, message is in the card above -->
+        <WaveformBars
+          bandLevels={Array(11).fill(0)}
+          mode="noSpeech"
+          isPaused={false}
+        />
       {:else if overlayData.mode === 'recording' || overlayData.mode === 'processing'}
         <!-- Recording / Processing state -->
         {#if overlayData.isHandsFree}
@@ -360,27 +361,6 @@
           mode="idle"
           isPaused={true}
         />
-      {:else if overlayData.mode === 'idle' && hovering}
-        <!-- Idle + hovering — show mic icon -->
-        <div class="hover-mic">
-          <svg viewBox="0 0 16 22" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <rect x="4" y="1" width="8" height="13" rx="4" fill="rgba(255,255,255,0.9)"/>
-            <path d="M1 10C1 14.4183 4.13401 18 8 18C11.866 18 15 14.4183 15 10" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round"/>
-            <line x1="8" y1="18" x2="8" y2="21" stroke="rgba(255,255,255,0.9)" stroke-width="1.5" stroke-linecap="round"/>
-          </svg>
-        </div>
-      {/if}
-
-      <!-- Hover tooltip (above pill when idle) -->
-      {#if isMinimized && hovering}
-        <div
-          class="tooltip"
-          style="
-            animation: cardEnter 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
-          "
-        >
-          Click to start transcribing
-        </div>
       {/if}
     </div>
   </div>
