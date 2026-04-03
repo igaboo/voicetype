@@ -20,6 +20,9 @@
     "core:event:allow-emit-to",
     "core:event:allow-listen",
     "core:event:allow-unlisten",
-    "opener:default"
+    "opener:default",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled"
   ]
 }

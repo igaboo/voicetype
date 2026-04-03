@@ -132,6 +132,18 @@
   let alwaysVisiblePill = $state(true);
   let startWithSystem = $state(false);
 
+  // Load + sync autostart state with the OS
+  async function loadAutostart() {
+    const { isEnabled } = await import('@tauri-apps/plugin-autostart');
+    startWithSystem = await isEnabled();
+  }
+  loadAutostart();
+
+  async function toggleAutostart(enabled: boolean) {
+    const { enable, disable } = await import('@tauri-apps/plugin-autostart');
+    if (enabled) { await enable(); } else { await disable(); }
+  }
+
   // History
   let historyEnabled = $state(true);
 
@@ -729,7 +741,7 @@
               <span class="toggle-description">Launch Yap automatically when you log in</span>
             </div>
             <label class="toggle-switch">
-              <input type="checkbox" bind:checked={startWithSystem} />
+              <input type="checkbox" bind:checked={startWithSystem} onchange={() => toggleAutostart(startWithSystem)} />
               <span class="toggle-track"></span>
               <span class="toggle-thumb"></span>
             </label>

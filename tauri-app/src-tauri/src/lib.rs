@@ -187,6 +187,10 @@ fn get_pipeline_state(orch: tauri::State<'_, Arc<Orchestrator>>) -> orchestrator
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
             // Initialize the orchestrator -- this loads config, starts
             // the hotkey listener, sets up the tray, and begins the
