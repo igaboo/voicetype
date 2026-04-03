@@ -56,7 +56,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
 
     // --- Build tray icon ---
 
-    let icon = Image::from_bytes(include_bytes!("../icons/32x32.png"))
+    let icon = Image::from_bytes(include_bytes!("../icons/tray.png"))
         .map_err(|e| format!("failed to load tray icon: {e}"))?;
 
     let _tray = TrayIconBuilder::with_id("yap-tray")
