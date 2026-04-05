@@ -255,10 +255,12 @@ impl OrchestratorInner {
             let s = state_str.to_string();
             let hf = hands_free.unwrap_or(false);
             let p = paused.unwrap_or(false);
+            let el = elapsed.unwrap_or(0.0);
             crate::win_overlay::update_state(|st| {
                 st.mode = s;
                 st.hands_free = hf;
                 st.paused = p;
+                st.elapsed = el;
             });
         }
     }
@@ -314,10 +316,20 @@ impl OrchestratorInner {
 
         #[cfg(target_os = "macos")]
         crate::sidecar::send(&crate::sidecar::OutMessage::Onboarding {
-            step: step_str,
+            step: step_str.clone(),
             text,
             hotkey_label: self.hotkey_label.clone(),
         });
+
+        #[cfg(target_os = "windows")]
+        {
+            let step = crate::win_overlay::OnboardingStep::from_str(&step_str);
+            let label = self.hotkey_label.clone();
+            crate::win_overlay::update_state(|st| {
+                st.onboarding_step = step;
+                st.hotkey_label = label;
+            });
+        }
     }
 
     /// The effective onboarding step for input gating.
@@ -411,6 +423,8 @@ impl Orchestrator {
                     let _ = inner.app.emit("onboarding:press", true);
                     #[cfg(target_os = "macos")]
                     crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: true });
+                    #[cfg(target_os = "windows")]
+                    crate::win_overlay::update_state(|st| st.is_pressed = true);
                     let app = inner.app.clone();
                     drop(inner);
 
@@ -426,6 +440,8 @@ impl Orchestrator {
                                 let _ = inner.app.emit("onboarding:press", false);
             #[cfg(target_os = "macos")]
             crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
+            #[cfg(target_os = "windows")]
+            crate::win_overlay::update_state(|st| st.is_pressed = false);
                                 play_sound(&inner.app, "Pop");
                                 drop(inner);
                                 // Small delay then advance
@@ -498,6 +514,8 @@ impl Orchestrator {
             let _ = inner.app.emit("onboarding:press", false);
             #[cfg(target_os = "macos")]
             crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
+            #[cfg(target_os = "windows")]
+            crate::win_overlay::update_state(|st| st.is_pressed = false);
             return;
         }
 
@@ -758,6 +776,18 @@ impl Orchestrator {
                 always_visible: cfg.always_visible_pill,
                 hotkey_label: inner.hotkey_label.clone(),
             });
+
+            #[cfg(target_os = "windows")]
+            {
+                let ge = cfg.gradient_enabled;
+                let av = cfg.always_visible_pill;
+                let label = inner.hotkey_label.clone();
+                crate::win_overlay::update_state(|st| {
+                    st.gradient_enabled = ge;
+                    st.always_visible = av;
+                    st.hotkey_label = label;
+                });
+            }
         }
     }
 
@@ -862,6 +892,15 @@ impl Orchestrator {
             paused: None,
             elapsed: None,
         });
+        #[cfg(target_os = "macos")]
+        crate::sidecar::send(&crate::sidecar::OutMessage::State {
+            state: "noSpeech".to_string(),
+            hands_free: false,
+            paused: false,
+            elapsed: 0.0,
+        });
+        #[cfg(target_os = "windows")]
+        crate::win_overlay::update_state(|st| st.mode = "noSpeech".into());
         inner.emit_onboarding();
 
         let app = inner.app.clone();

@@ -1,12 +1,25 @@
-//! Native Win32 overlay pill for Windows.
+//! Native Win32 overlay pill for Windows — full visual parity with macOS sidecar.
 //!
-//! Creates a small layered window (WS_EX_LAYERED) rendered with tiny-skia.
+//! Creates a layered window (WS_EX_LAYERED) rendered with tiny-skia + fontdue.
 //! Per-pixel alpha via UpdateLayeredWindow gives automatic click-through on
 //! transparent pixels — no hacking needed.
+//!
+//! Features:
+//!   - Lava lamp gradient background (radial gradient blobs)
+//!   - Spring-physics animated waveform bars
+//!   - Hands-free controls (pause/stop buttons)
+//!   - Onboarding cards with text rendering
+//!   - Error messages with auto-dismiss
+//!   - Hover state with mic icon + tooltip
+//!   - Processing shimmer sweep
+//!   - No-speech flat bars
+//!   - Elapsed time display
+//!   - Smooth 30fps animation loop
 
 #![cfg(target_os = "windows")]
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Instant;
 
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
@@ -16,18 +29,144 @@ use windows::core::*;
 use crate::orchestrator;
 
 // ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+/// Canvas large enough for gradient halo + onboarding card + pill.
+const CANVAS_W: i32 = 660;
+const CANVAS_H: i32 = 400;
+
+const WM_YAP_UPDATE: u32 = WM_USER + 1;
+
+// Pill geometry
+const BAR_COUNT: usize = 11;
+const BAR_W: f32 = 3.0;
+const BAR_GAP: f32 = 2.0;
+const BAR_MIN_H: f32 = 5.0;
+const BAR_MAX_H: f32 = 28.0;
+const BARS_TOTAL_W: f32 = BAR_COUNT as f32 * BAR_W + (BAR_COUNT - 1) as f32 * BAR_GAP;
+
+const POSITION_SCALE: [f32; 11] = [
+    0.35, 0.45, 0.6, 0.78, 0.92, 1.0, 0.94, 0.8, 0.63, 0.48, 0.38,
+];
+
+// ---------------------------------------------------------------------------
+// Onboarding step enum (mirrors orchestrator)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum OnboardingStep {
+    TryIt,
+    Nice,
+    DoubleTapTip,
+    ClickTip,
+    ApiTip,
+    FormattingTip,
+    Welcome,
+    SpeakTip,
+    HoldTip,
+}
+
+impl OnboardingStep {
+    pub fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "tryIt" => Some(Self::TryIt),
+            "nice" => Some(Self::Nice),
+            "doubleTapTip" => Some(Self::DoubleTapTip),
+            "clickTip" => Some(Self::ClickTip),
+            "apiTip" => Some(Self::ApiTip),
+            "formattingTip" => Some(Self::FormattingTip),
+            "welcome" => Some(Self::Welcome),
+            "speakTip" => Some(Self::SpeakTip),
+            "holdTip" => Some(Self::HoldTip),
+            _ => None,
+        }
+    }
+
+    /// Whether this step shows "Hold [key] to continue/finish" in the pill.
+    fn shows_hold_prompt(&self) -> bool {
+        matches!(self, Self::ApiTip | Self::FormattingTip | Self::Welcome)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spring physics
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+struct Spring {
+    current: f32,
+    target: f32,
+    velocity: f32,
+    stiffness: f32,
+    damping: f32,
+}
+
+impl Spring {
+    fn new(value: f32, stiffness: f32, damping: f32) -> Self {
+        Self { current: value, target: value, velocity: 0.0, stiffness, damping }
+    }
+
+    fn set_target(&mut self, t: f32) {
+        self.target = t;
+    }
+
+    fn snap(&mut self, v: f32) {
+        self.current = v;
+        self.target = v;
+        self.velocity = 0.0;
+    }
+
+    /// Advance one tick. dt in seconds.
+    fn tick(&mut self, dt: f32) {
+        let accel = -self.stiffness * (self.current - self.target) - self.damping * self.velocity;
+        self.velocity += accel * dt;
+        self.current += self.velocity * dt;
+        // Snap if close enough and slow enough
+        if (self.current - self.target).abs() < 0.001 && self.velocity.abs() < 0.01 {
+            self.current = self.target;
+            self.velocity = 0.0;
+        }
+    }
+
+    fn val(&self) -> f32 {
+        self.current
+    }
+
+    fn is_settled(&self) -> bool {
+        self.current == self.target && self.velocity == 0.0
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Overlay state (shared between render + orchestrator threads)
 // ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 pub struct OverlayState {
-    pub mode: String,         // "idle" | "recording" | "processing"
+    // Core state
+    pub mode: String, // "idle" | "recording" | "processing" | "noSpeech" | "error"
     pub bars: [f32; 11],
     pub level: f32,
     pub hands_free: bool,
     pub paused: bool,
     pub hovering: bool,
     pub error: Option<String>,
+    pub elapsed: f64,
+
+    // Onboarding
+    pub onboarding_step: Option<OnboardingStep>,
+    pub hotkey_label: String,
+
+    // Config
+    pub gradient_enabled: bool,
+    pub always_visible: bool,
+
+    // Celebration
+    pub celebrating: bool,
+
+    // Pressed state (onboarding key press visual)
+    pub is_pressed: bool,
 }
 
 impl Default for OverlayState {
@@ -40,19 +179,304 @@ impl Default for OverlayState {
             paused: false,
             hovering: false,
             error: None,
+            elapsed: 0.0,
+            onboarding_step: None,
+            hotkey_label: "fn".into(),
+            gradient_enabled: true,
+            always_visible: true,
+            celebrating: false,
+            is_pressed: false,
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// Animation state (owned by render thread, NOT shared)
+// ---------------------------------------------------------------------------
+
+struct AnimState {
+    bar_springs: [Spring; 11],
+    pill_scale: Spring,        // 0.5 (minimized) → 1.0 (expanded)
+    pill_opacity: Spring,      // For fade in/out
+    gradient_energy: Spring,   // 0.0–1.0
+    hover_progress: Spring,    // 0→1 for hover transition
+    slide_y: Spring,           // Y offset for slide in/out
+    error_timer: Option<Instant>, // When error was shown
+    shake_progress: f32,       // 0→1 for no-speech shake
+    shake_active: bool,
+    celebration_start: Option<Instant>,
+    prev_mode: String,
+    start_time: Instant,
+    visible: bool,             // Whether overlay should be visible at all
+}
+
+impl AnimState {
+    fn new() -> Self {
+        Self {
+            bar_springs: std::array::from_fn(|_| Spring::new(BAR_MIN_H, 280.0, 18.0)),
+            pill_scale: Spring::new(0.5, 180.0, 22.0),
+            pill_opacity: Spring::new(1.0, 200.0, 20.0),
+            gradient_energy: Spring::new(0.0, 120.0, 18.0),
+            hover_progress: Spring::new(0.0, 200.0, 22.0),
+            slide_y: Spring::new(80.0, 150.0, 20.0), // start off-screen
+            error_timer: None,
+            shake_progress: 0.0,
+            shake_active: false,
+            celebration_start: None,
+            prev_mode: "idle".into(),
+            start_time: Instant::now(),
+            visible: true,
+        }
+    }
+
+    /// Update all animations for one frame. dt in seconds.
+    fn tick(&mut self, state: &OverlayState, dt: f32) {
+        let is_expanded = state.mode != "idle" || state.onboarding_step.is_some();
+        let is_active = is_expanded;
+
+        // -- Mode transitions --
+        if state.mode != self.prev_mode {
+            if state.mode == "noSpeech" {
+                self.shake_active = true;
+                self.shake_progress = 0.0;
+            }
+            if state.mode == "recording" && self.prev_mode == "idle" {
+                // Slide in
+                self.slide_y.set_target(0.0);
+                self.visible = true;
+            }
+            if state.mode == "idle" && !state.always_visible && state.onboarding_step.is_none() {
+                // Slide out
+                self.slide_y.set_target(80.0);
+            }
+            self.prev_mode = state.mode.clone();
+        }
+
+        // Visibility
+        if state.always_visible || is_active {
+            self.slide_y.set_target(0.0);
+            self.visible = true;
+        } else if state.mode == "idle" && !state.always_visible && state.onboarding_step.is_none() {
+            self.slide_y.set_target(80.0);
+        }
+        if self.slide_y.val() > 79.0 && self.slide_y.is_settled() {
+            self.visible = false;
+        }
+
+        // -- Pill scale --
+        let base_scale = if is_expanded { 1.0 } else if state.hovering { 0.65 } else { 0.5 };
+        let audio_bounce = if state.mode == "recording" && !state.paused {
+            let lvl = state.level.min(1.0);
+            1.0 + lvl.powf(1.5) * 0.25
+        } else {
+            1.0
+        };
+        let press_scale = if state.is_pressed { 0.85 } else { 1.0 };
+        let proc_scale = if state.mode == "processing" { 0.8 } else { 1.0 };
+        self.pill_scale.set_target(base_scale * audio_bounce * press_scale * proc_scale);
+
+        // -- Gradient energy --
+        let energy = match state.mode.as_str() {
+            "recording" => 1.0,
+            "processing" => 0.6,
+            _ => {
+                if state.hovering { 0.15 }
+                else if state.onboarding_step.is_some() { 0.3 }
+                else { 0.0 }
+            }
+        };
+        self.gradient_energy.set_target(if (is_expanded || state.hovering) && state.gradient_enabled { energy } else { 0.0 });
+
+        // -- Hover --
+        self.hover_progress.set_target(if state.hovering && state.mode == "idle" && state.onboarding_step.is_none() { 1.0 } else { 0.0 });
+
+        // -- Bar heights --
+        let is_processing = state.mode == "processing";
+        let t = self.start_time.elapsed().as_secs_f64();
+        let wave_t = (t % 1.2) / 1.2;
+
+        for i in 0..BAR_COUNT {
+            let scale = POSITION_SCALE[i];
+            let bar_ceiling = BAR_MIN_H + (BAR_MAX_H - BAR_MIN_H) * scale;
+
+            let target_h = if is_processing {
+                let wave_center = -5.0 + wave_t as f32 * 20.0;
+                let dist = (i as f32 - wave_center).abs();
+                let wave = (-dist * dist / 6.0).exp();
+                (BAR_MIN_H + 14.0 * wave).min(BAR_MAX_H)
+            } else if state.mode == "recording" && !state.paused {
+                let bar_level = state.bars[i];
+                let overall: f32 = state.bars.iter().sum::<f32>() / 11.0;
+                let blended = overall * 0.7 + bar_level * 0.3;
+                let scaled = (blended / 0.75).min(1.0);
+                let driven = scaled.powf(0.6);
+                BAR_MIN_H.max((BAR_MIN_H + (bar_ceiling - BAR_MIN_H) * driven).min(bar_ceiling))
+            } else {
+                BAR_MIN_H // flat bars for idle, paused, noSpeech
+            };
+
+            self.bar_springs[i].set_target(target_h);
+            self.bar_springs[i].tick(dt);
+        }
+
+        // -- Error auto-dismiss --
+        if state.mode == "error" {
+            if self.error_timer.is_none() {
+                self.error_timer = Some(Instant::now());
+            }
+        } else {
+            self.error_timer = None;
+        }
+
+        // -- Shake animation --
+        if self.shake_active {
+            self.shake_progress += dt * 2.0; // 0.5s duration
+            if self.shake_progress >= 1.0 {
+                self.shake_progress = 1.0;
+                self.shake_active = false;
+            }
+        }
+
+        // Tick all springs
+        self.pill_scale.tick(dt);
+        self.pill_opacity.tick(dt);
+        self.gradient_energy.tick(dt);
+        self.hover_progress.tick(dt);
+        self.slide_y.tick(dt);
+    }
+
+    fn needs_animation(&self, state: &OverlayState) -> bool {
+        state.mode == "processing"
+            || state.mode == "recording"
+            || !self.pill_scale.is_settled()
+            || !self.gradient_energy.is_settled()
+            || !self.hover_progress.is_settled()
+            || !self.slide_y.is_settled()
+            || !self.pill_opacity.is_settled()
+            || self.shake_active
+            || self.celebration_start.is_some()
+            || self.bar_springs.iter().any(|s| !s.is_settled())
+    }
+
+    /// Should the error be dismissed?
+    fn should_dismiss_error(&self) -> bool {
+        self.error_timer.map(|t| t.elapsed().as_secs_f64() > 2.5).unwrap_or(false)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Font renderer (fontdue)
+// ---------------------------------------------------------------------------
+
+struct FontRenderer {
+    font: fontdue::Font,
+}
+
+impl FontRenderer {
+    fn load() -> Option<Self> {
+        // Try loading Windows system font Segoe UI
+        let paths = [
+            r"C:\Windows\Fonts\segoeui.ttf",
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\tahoma.ttf",
+        ];
+        for path in &paths {
+            if let Ok(data) = std::fs::read(path) {
+                let settings = fontdue::FontSettings {
+                    collection_index: 0,
+                    scale: 40.0,
+                };
+                if let Ok(font) = fontdue::Font::from_bytes(data, settings) {
+                    return Some(Self { font });
+                }
+            }
+        }
+        None
+    }
+
+    /// Measure text width at given size.
+    fn measure(&self, text: &str, size: f32) -> f32 {
+        let mut width = 0.0;
+        for ch in text.chars() {
+            let metrics = self.font.metrics(ch, size);
+            width += metrics.advance_width;
+        }
+        width
+    }
+
+    /// Render text onto pixmap at (x, y) with given color and size.
+    /// y is the baseline. Returns the advance width.
+    fn render(
+        &self,
+        pixmap: &mut tiny_skia::Pixmap,
+        text: &str,
+        mut x: f32,
+        y: f32,
+        size: f32,
+        color: [u8; 4], // RGBA
+    ) -> f32 {
+        let start_x = x;
+        for ch in text.chars() {
+            let (metrics, bitmap) = self.font.rasterize(ch, size);
+            if !bitmap.is_empty() && metrics.width > 0 && metrics.height > 0 {
+                let gx = x + metrics.xmin as f32;
+                let gy = y - metrics.height as f32 - metrics.ymin as f32;
+                // Composite each pixel
+                for row in 0..metrics.height {
+                    for col in 0..metrics.width {
+                        let alpha = bitmap[row * metrics.width + col];
+                        if alpha == 0 { continue; }
+                        let px = (gx + col as f32) as i32;
+                        let py = (gy + row as f32) as i32;
+                        if px < 0 || py < 0 || px >= pixmap.width() as i32 || py >= pixmap.height() as i32 {
+                            continue;
+                        }
+                        let idx = (py as u32 * pixmap.width() + px as u32) as usize * 4;
+                        let data = pixmap.data_mut();
+                        if idx + 3 >= data.len() { continue; }
+                        // Alpha blend (premultiplied)
+                        let sa = (alpha as u16 * color[3] as u16) / 255;
+                        let sr = (color[0] as u16 * sa) / 255;
+                        let sg = (color[1] as u16 * sa) / 255;
+                        let sb = (color[2] as u16 * sa) / 255;
+                        let da = data[idx + 3] as u16;
+                        let dr = data[idx] as u16;
+                        let dg = data[idx + 1] as u16;
+                        let db = data[idx + 2] as u16;
+                        let inv_sa = 255 - sa;
+                        data[idx]     = ((sr + dr * inv_sa / 255).min(255)) as u8;
+                        data[idx + 1] = ((sg + dg * inv_sa / 255).min(255)) as u8;
+                        data[idx + 2] = ((sb + db * inv_sa / 255).min(255)) as u8;
+                        data[idx + 3] = ((sa + da * inv_sa / 255).min(255)) as u8;
+                    }
+                }
+            }
+            x += metrics.advance_width;
+        }
+        x - start_x
+    }
+
+    /// Render centered text. Returns the width.
+    fn render_centered(
+        &self,
+        pixmap: &mut tiny_skia::Pixmap,
+        text: &str,
+        cx: f32,
+        y: f32,
+        size: f32,
+        color: [u8; 4],
+    ) -> f32 {
+        let w = self.measure(text, size);
+        self.render(pixmap, text, cx - w / 2.0, y, size, color)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statics
+// ---------------------------------------------------------------------------
+
 static STATE: OnceLock<Arc<Mutex<OverlayState>>> = OnceLock::new();
-static HWND: OnceLock<HWND> = OnceLock::new();
-
-const WM_YAP_UPDATE: u32 = WM_USER + 1;
-
-// Pill dimensions
-const PILL_W: i32 = 200;
-const PILL_H: i32 = 56;
-const PILL_H_MINIMIZED: i32 = 28;
+static HWND_CELL: OnceLock<HWND> = OnceLock::new();
 
 // ---------------------------------------------------------------------------
 // Public API (called from orchestrator thread)
@@ -64,13 +488,14 @@ pub fn update_state(f: impl FnOnce(&mut OverlayState)) {
         f(&mut s);
     }
     // Trigger re-render on the overlay thread
-    if let Some(&hwnd) = HWND.get() {
-        unsafe { let _ = PostMessageW(Some(hwnd), WM_YAP_UPDATE, WPARAM(0), LPARAM(0)); }
+    if let Some(&hwnd) = HWND_CELL.get() {
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_YAP_UPDATE, WPARAM(0), LPARAM(0));
+        }
     }
 }
 
-pub fn on_pill_click_callback() {
-    // This runs on the overlay's window thread — dispatch to orchestrator
+fn on_pill_click_callback() {
     if let Some(app) = crate::sidecar::get_app_handle() {
         use tauri::Manager;
         let orch: tauri::State<'_, Arc<orchestrator::Orchestrator>> = app.state();
@@ -78,11 +503,25 @@ pub fn on_pill_click_callback() {
     }
 }
 
+fn on_pause_callback() {
+    if let Some(app) = crate::sidecar::get_app_handle() {
+        use tauri::Manager;
+        let orch: tauri::State<'_, Arc<orchestrator::Orchestrator>> = app.state();
+        orch.toggle_pause();
+    }
+}
+
+fn on_stop_callback() {
+    if let Some(app) = crate::sidecar::get_app_handle() {
+        use tauri::Manager;
+        let orch: tauri::State<'_, Arc<orchestrator::Orchestrator>> = app.state();
+        orch.stop_hands_free();
+    }
+}
+
 /// Spawn the overlay window on a dedicated thread.
 pub fn spawn(app: &tauri::AppHandle) {
     let _ = STATE.set(Arc::new(Mutex::new(OverlayState::default())));
-
-    // Store app handle for click callbacks
     crate::sidecar::store_app_handle(app);
 
     std::thread::Builder::new()
@@ -94,7 +533,7 @@ pub fn spawn(app: &tauri::AppHandle) {
 }
 
 // ---------------------------------------------------------------------------
-// Win32 window
+// Win32 window loop
 // ---------------------------------------------------------------------------
 
 unsafe fn run_window_loop() {
@@ -113,15 +552,18 @@ unsafe fn run_window_loop() {
     // Position: bottom-center of primary monitor
     let screen_w = GetSystemMetrics(SM_CXSCREEN);
     let screen_h = GetSystemMetrics(SM_CYSCREEN);
-    let x = (screen_w - PILL_W) / 2;
-    let y = screen_h - PILL_H - 30; // 30px from bottom
+    let x = (screen_w - CANVAS_W) / 2;
+    let y = screen_h - CANVAS_H;
 
     let hwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
         class_name,
         w!("Yap Overlay"),
         WS_POPUP,
-        x, y, PILL_W, PILL_H,
+        x,
+        y,
+        CANVAS_W,
+        CANVAS_H,
         None,
         None,
         None,
@@ -129,14 +571,21 @@ unsafe fn run_window_loop() {
     )
     .unwrap();
 
-    let _ = HWND.set(hwnd);
+    let _ = HWND_CELL.set(hwnd);
 
     // Initial render
-    render_pill(hwnd);
+    let font = FontRenderer::load();
+    let mut anim = AnimState::new();
+
+    render_frame(hwnd, &mut anim, &font);
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
-    // Timer for animation (processing shimmer, level decay) — 33ms ≈ 30fps
+    // 33ms timer ≈ 30fps
     let _ = SetTimer(Some(hwnd), 1, 33, None);
+
+    // Store animation + font state in window's user data
+    let ctx = Box::new(RenderContext { anim, font });
+    SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(ctx) as isize);
 
     // Message loop
     let mut msg = MSG::default();
@@ -146,6 +595,11 @@ unsafe fn run_window_loop() {
     }
 }
 
+struct RenderContext {
+    anim: AnimState,
+    font: Option<FontRenderer>,
+}
+
 unsafe extern "system" fn wnd_proc(
     hwnd: HWND,
     msg: u32,
@@ -153,25 +607,28 @@ unsafe extern "system" fn wnd_proc(
     lparam: LPARAM,
 ) -> LRESULT {
     match msg {
-        WM_YAP_UPDATE => {
-            render_pill(hwnd);
-            LRESULT(0)
-        }
-        WM_TIMER => {
-            // Re-render for animations (processing shimmer)
-            let should_animate = STATE.get()
-                .map(|s| {
-                    let s = s.lock().unwrap();
-                    s.mode == "processing" || s.mode == "recording"
-                })
-                .unwrap_or(false);
-            if should_animate {
-                render_pill(hwnd);
+        WM_YAP_UPDATE | WM_TIMER => {
+            let ptr = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut RenderContext;
+            if !ptr.is_null() {
+                let ctx = &mut *ptr;
+                // Check error auto-dismiss
+                if ctx.anim.should_dismiss_error() {
+                    update_state(|st| {
+                        st.mode = "idle".into();
+                        st.error = None;
+                    });
+                }
+                let state = STATE.get().map(|s| s.lock().unwrap().clone());
+                if let Some(state) = &state {
+                    if ctx.anim.needs_animation(state) || msg == WM_YAP_UPDATE {
+                        render_frame(hwnd, &mut ctx.anim, &ctx.font);
+                    }
+                }
             }
             LRESULT(0)
         }
         WM_MOUSEMOVE => {
-            // Start tracking mouse leave
+            // Track mouse leave
             let mut tme = TRACKMOUSEEVENT {
                 cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,
@@ -184,10 +641,6 @@ unsafe extern "system" fn wnd_proc(
                 let mut s = state.lock().unwrap();
                 if !s.hovering {
                     s.hovering = true;
-                    drop(s);
-                    render_pill(hwnd);
-                    // Grow window for hover
-                    resize_pill(hwnd, true);
                 }
             }
             LRESULT(0)
@@ -196,18 +649,39 @@ unsafe extern "system" fn wnd_proc(
             if let Some(state) = STATE.get() {
                 let mut s = state.lock().unwrap();
                 s.hovering = false;
-                drop(s);
-                render_pill(hwnd);
-                resize_pill(hwnd, false);
             }
             LRESULT(0)
         }
         WM_LBUTTONDOWN => {
-            let mode = STATE.get()
-                .map(|s| s.lock().unwrap().mode.clone())
-                .unwrap_or_default();
-            if mode != "processing" {
-                on_pill_click_callback();
+            let state = STATE.get().map(|s| s.lock().unwrap().clone());
+            if let Some(state) = state {
+                // Determine what was clicked based on mouse position
+                let mouse_x = (lparam.0 & 0xFFFF) as i16 as f32;
+                let mouse_y = ((lparam.0 >> 16) & 0xFFFF) as i16 as f32;
+                let cx = CANVAS_W as f32 / 2.0;
+                let pill_y = CANVAS_H as f32 - 60.0; // pill center Y
+
+                if state.hands_free && state.mode == "recording" {
+                    // Check pause/stop button hits
+                    let audio_bounce = {
+                        let lvl = state.level.min(1.0);
+                        1.0 + lvl.powf(1.5) * 0.25
+                    };
+                    let pause_cx = cx - 49.0 * audio_bounce;
+                    let stop_cx = cx + 49.0 * audio_bounce;
+                    let btn_r = 17.0; // button radius + padding
+
+                    let pause_dist = ((mouse_x - pause_cx).powi(2) + (mouse_y - pill_y).powi(2)).sqrt();
+                    let stop_dist = ((mouse_x - stop_cx).powi(2) + (mouse_y - pill_y).powi(2)).sqrt();
+
+                    if pause_dist < btn_r {
+                        on_pause_callback();
+                    } else if stop_dist < btn_r {
+                        on_stop_callback();
+                    }
+                } else if state.mode != "processing" {
+                    on_pill_click_callback();
+                }
             }
             LRESULT(0)
         }
@@ -219,130 +693,376 @@ unsafe extern "system" fn wnd_proc(
     }
 }
 
-unsafe fn resize_pill(hwnd: HWND, expanded: bool) {
-    let screen_w = GetSystemMetrics(SM_CXSCREEN);
-    let screen_h = GetSystemMetrics(SM_CYSCREEN);
-    let h = if expanded { PILL_H } else { PILL_H_MINIMIZED };
-    let x = (screen_w - PILL_W) / 2;
-    let y = screen_h - h - 30;
-    let _ = SetWindowPos(
-        hwnd, None, x, y, PILL_W, h,
-        SWP_NOACTIVATE | SWP_NOZORDER,
-    );
-}
-
 // ---------------------------------------------------------------------------
-// Rendering with tiny-skia
+// Rendering
 // ---------------------------------------------------------------------------
 
-fn render_pill(hwnd: HWND) {
+fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     let state = match STATE.get() {
         Some(s) => s.lock().unwrap().clone(),
         None => return,
     };
 
-    let is_expanded = state.mode != "idle" || state.hovering;
-    let w = PILL_W as u32;
-    let h = if is_expanded { PILL_H as u32 } else { PILL_H_MINIMIZED as u32 };
+    // Advance animation
+    anim.tick(&state, 0.033); // ~30fps
+
+    let w = CANVAS_W as u32;
+    let h = CANVAS_H as u32;
 
     let mut pixmap = match tiny_skia::Pixmap::new(w, h) {
         Some(p) => p,
         None => return,
     };
 
-    // -- Draw capsule background --
-    let radius = h as f32 / 2.0;
-    let bg_alpha = if is_expanded { 0.75 } else { 0.4 };
-    let bg = tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, bg_alpha).unwrap();
-
-    let capsule = rounded_rect(1.0, 1.0, w as f32 - 2.0, h as f32 - 2.0, radius);
-    let mut paint = tiny_skia::Paint::default();
-    paint.set_color(bg);
-    paint.anti_alias = true;
-    pixmap.fill_path(&capsule, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
-
-    // -- Draw border --
-    let border_color = tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, if is_expanded { 0.3 } else { 0.35 }).unwrap();
-    let mut stroke_paint = tiny_skia::Paint::default();
-    stroke_paint.set_color(border_color);
-    stroke_paint.anti_alias = true;
-    let stroke = tiny_skia::Stroke {
-        width: if is_expanded { 1.0 } else { 1.5 },
-        ..Default::default()
-    };
-    pixmap.stroke_path(&capsule, &stroke_paint, &stroke, Default::default(), None);
-
-    // -- Draw content based on mode --
-    match state.mode.as_str() {
-        "recording" | "processing" => {
-            draw_bars(&mut pixmap, &state, w, h);
-        }
-        "idle" if state.hovering => {
-            draw_mic_icon(&mut pixmap, w, h);
-        }
-        _ => {}
+    // Don't render if not visible and settled
+    if !anim.visible && anim.slide_y.is_settled() {
+        blit_to_layered_window(hwnd, &pixmap, w, h);
+        return;
     }
 
-    // -- Blit to layered window via UpdateLayeredWindow --
-    blit_to_layered_window(hwnd, &pixmap, w, h);
-}
+    let cx = w as f32 / 2.0;
+    // Pill center Y with slide offset
+    let pill_cy = h as f32 - 60.0 + anim.slide_y.val();
 
-fn draw_bars(pixmap: &mut tiny_skia::Pixmap, state: &OverlayState, w: u32, h: u32) {
-    let bar_count = 11;
-    let bar_w: f32 = 3.0;
-    let gap: f32 = 2.0;
-    let total_w = bar_count as f32 * bar_w + (bar_count - 1) as f32 * gap;
-    let start_x = (w as f32 - total_w) / 2.0;
-    let center_y = h as f32 / 2.0;
+    // -- Lava lamp gradient --
+    if anim.gradient_energy.val() > 0.01 {
+        render_gradient(&mut pixmap, anim, cx, pill_cy);
+    }
 
-    let position_scale: [f32; 11] = [0.35, 0.45, 0.6, 0.78, 0.92, 1.0, 0.94, 0.8, 0.63, 0.48, 0.38];
-    let min_h: f32 = 5.0;
-    let max_h: f32 = 28.0;
+    // -- Onboarding card (above pill) --
+    let is_expanded = state.mode != "idle" || state.onboarding_step.is_some();
+    if let Some(ref step) = state.onboarding_step {
+        if state.mode == "idle" || state.mode == "noSpeech" {
+            if let Some(ref fr) = font {
+                render_onboarding_card(&mut pixmap, fr, step, &state.hotkey_label, cx, pill_cy - 50.0);
+            }
+        }
+    }
 
-    let is_processing = state.mode == "processing";
-    let t = if is_processing {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs_f64();
-        (now % 1.2) / 1.2
+    // -- Elapsed time (above pill, hands-free) --
+    if state.mode == "recording" && state.elapsed >= 10.0 {
+        if let Some(ref fr) = font {
+            let elapsed_text = format_elapsed(state.elapsed);
+            fr.render_centered(&mut pixmap, &elapsed_text, cx, pill_cy - 40.0, 11.0, [255, 255, 255, 128]);
+        }
+    }
+
+    // -- Pill background --
+    let pill_scale = anim.pill_scale.val();
+
+    // Compute pill content width
+    let content_w = if state.hands_free && (state.mode == "recording" || state.mode == "processing") {
+        138.0 // bars + pause + stop
+    } else if is_expanded {
+        if let Some(ref step) = state.onboarding_step {
+            if step.shows_hold_prompt() {
+                if let Some(ref fr) = font {
+                    let prompt = if state.onboarding_step.as_ref() == Some(&OnboardingStep::Welcome) {
+                        "Hold  to finish"
+                    } else {
+                        "Hold  to continue"
+                    };
+                    fr.measure(prompt, 12.0) + 50.0 // extra for keycap
+                } else { 76.0 }
+            } else { 76.0 }
+        } else { 76.0 }
+    } else { 64.0 };
+
+    let pill_w = content_w * pill_scale;
+    let pill_h = if is_expanded { 40.0 } else { 20.0 };
+    let pill_h = pill_h * pill_scale;
+
+    // Shake offset for noSpeech
+    let shake_offset = if anim.shake_active {
+        let p = anim.shake_progress;
+        10.0 * (p * std::f32::consts::PI * 6.0).sin() * (1.0 - p)
     } else {
         0.0
     };
 
-    for i in 0..bar_count {
-        let scale = position_scale[i];
-        let bar_level = state.bars.get(i).copied().unwrap_or(0.0);
+    let pill_x = cx - pill_w / 2.0 + shake_offset;
+    let pill_y = pill_cy - pill_h / 2.0;
+    let pill_r = pill_h / 2.0;
 
-        let bar_ceiling = min_h + (max_h - min_h) * scale;
-        let bar_h = if is_processing {
-            // Processing: wave sweep
-            let wave_center = -5.0 + t as f32 * 20.0;
-            let dist = (i as f32 - wave_center).abs();
-            let wave = (-dist * dist / 6.0_f32).exp();
-            (min_h + 14.0 * wave).min(max_h)
-        } else {
-            // Recording: audio-reactive
-            let overall: f32 = state.bars.iter().sum::<f32>() / 11.0;
-            let blended = overall * 0.7 + bar_level * 0.3;
-            let scaled = (blended / 0.75).min(1.0);
-            let driven = scaled.powf(0.6);
-            min_h.max((min_h + (bar_ceiling - min_h) * driven).min(bar_ceiling))
-        };
+    // Pill capsule background
+    let capsule = rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_r);
+    let mut bg_paint = tiny_skia::Paint::default();
+    let bg_alpha = if is_expanded { 0.75 } else { 0.4 };
+    bg_paint.set_color(tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, bg_alpha).unwrap());
+    bg_paint.anti_alias = true;
+    pixmap.fill_path(&capsule, &bg_paint, tiny_skia::FillRule::Winding, Default::default(), None);
 
-        let x = start_x + i as f32 * (bar_w + gap);
-        let y = center_y - bar_h / 2.0;
+    // Pill border
+    let border_alpha = if is_expanded { 0.3 } else { 0.35 };
+    let mut border_paint = tiny_skia::Paint::default();
+    border_paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, border_alpha).unwrap());
+    border_paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke {
+        width: if is_expanded { 1.0 } else { 1.5 },
+        ..Default::default()
+    };
+    pixmap.stroke_path(&capsule, &border_paint, &stroke, Default::default(), None);
+
+    // Shadow (subtle dark glow behind pill)
+    if is_expanded {
+        let shadow = rounded_rect(pill_x - 2.0, pill_y + 2.0, pill_w + 4.0, pill_h + 4.0, pill_r + 2.0);
+        let mut shadow_paint = tiny_skia::Paint::default();
+        shadow_paint.set_color(tiny_skia::Color::from_rgba(0.0, 0.0, 0.0, 0.15).unwrap());
+        shadow_paint.anti_alias = true;
+        // Draw shadow behind (we'd need to draw before pill, but this is a simple approximation)
+    }
+
+    // -- Pill content --
+    let pill_content_cx = cx + shake_offset;
+
+    if let Some(ref step) = state.onboarding_step {
+        if step.shows_hold_prompt() && (state.mode == "idle" || state.mode == "noSpeech") {
+            // "Hold [key] to continue/finish" inside pill
+            if let Some(ref fr) = font {
+                let suffix = if *step == OnboardingStep::Welcome { "to finish" } else { "to continue" };
+                let hold_w = fr.measure("Hold ", 12.0);
+                let key_w = fr.measure(&state.hotkey_label, 12.0) + 20.0; // keycap padding
+                let suffix_w = fr.measure(suffix, 12.0);
+                let total_w = hold_w + key_w + 6.0 + suffix_w;
+                let start_x = pill_content_cx - total_w / 2.0;
+
+                let text_y = pill_cy + 4.0;
+                let color = [255, 255, 255, 200];
+                let mut x = start_x;
+                x += fr.render(&mut pixmap, "Hold ", x, text_y, 12.0, color);
+                // Draw keycap
+                render_keycap(&mut pixmap, font, &state.hotkey_label, x, pill_cy, 12.0);
+                x += key_w + 6.0;
+                fr.render(&mut pixmap, suffix, x, text_y, 12.0, color);
+            }
+        } else if state.mode == "idle" || state.mode == "noSpeech" {
+            // Flat bars for onboarding idle
+            render_flat_bars(&mut pixmap, pill_content_cx, pill_cy);
+        }
+    }
+
+    match state.mode.as_str() {
+        "recording" | "processing" => {
+            if state.hands_free {
+                render_hands_free_content(&mut pixmap, anim, &state, pill_content_cx, pill_cy);
+            } else {
+                render_bars(&mut pixmap, anim, &state, pill_content_cx, pill_cy);
+            }
+        }
+        "error" => {
+            if let Some(ref msg) = state.error {
+                if let Some(ref fr) = font {
+                    render_error_content(&mut pixmap, fr, msg, pill_content_cx, pill_cy);
+                }
+            }
+        }
+        "noSpeech" => {
+            if state.onboarding_step.is_none() || !state.onboarding_step.as_ref().unwrap().shows_hold_prompt() {
+                render_flat_bars(&mut pixmap, pill_content_cx, pill_cy);
+            }
+        }
+        "idle" => {
+            if state.onboarding_step.is_none() {
+                if state.hovering {
+                    // Mic icon
+                    draw_mic_icon(&mut pixmap, pill_content_cx, pill_cy);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    // -- Hover tooltip (below pill when minimized) --
+    if anim.hover_progress.val() > 0.01 && state.mode == "idle" && state.onboarding_step.is_none() {
+        if let Some(ref fr) = font {
+            let alpha = (anim.hover_progress.val() * 255.0) as u8;
+            let tooltip_y = pill_cy + pill_h / 2.0 + 22.0;
+            fr.render_centered(
+                &mut pixmap,
+                "Click to start transcribing",
+                cx,
+                tooltip_y,
+                13.0,
+                [255, 255, 255, alpha],
+            );
+        }
+    }
+
+    blit_to_layered_window(hwnd, &pixmap, w, h);
+}
+
+// ---------------------------------------------------------------------------
+// Sub-renderers
+// ---------------------------------------------------------------------------
+
+fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy: f32) {
+    let energy = anim.gradient_energy.val();
+    let t = anim.start_time.elapsed().as_secs_f64();
+    let speed = 0.4 + energy as f64 * 0.6;
+    let brightness = 0.25 + energy * 0.25;
+
+    // Celebration orbit
+    let (ox0, oy0, ox1, oy1, ox2, oy2, ox3, oy3) = if let Some(start) = anim.celebration_start {
+        let p = start.elapsed().as_secs_f64() * 4.0; // faster orbit
+        let envelope = (p / 4.0).sin().max(0.0) as f32;
+        let r = 150.0 * envelope;
+        (
+            p.cos() as f32 * r, p.sin() as f32 * r,
+            (p + std::f64::consts::FRAC_PI_2).cos() as f32 * r,
+            (p + std::f64::consts::FRAC_PI_2).sin() as f32 * r,
+            (p + std::f64::consts::PI).cos() as f32 * r,
+            (p + std::f64::consts::PI).sin() as f32 * r,
+            (p + std::f64::consts::PI * 1.5).cos() as f32 * r,
+            (p + std::f64::consts::PI * 1.5).sin() as f32 * r,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    };
+
+    // Four gradient blobs — each is a large radial gradient circle
+    struct Blob {
+        x: f32, y: f32, rx: f32, ry: f32,
+        r: f32, g: f32, b: f32, a: f32,
+    }
+
+    let blobs = [
+        Blob { // Purple
+            x: cx + (t * 0.7 * speed).cos() as f32 * 120.0 + ox0,
+            y: cy + (t * 0.5 * speed).sin() as f32 * 35.0 + oy0,
+            rx: 150.0, ry: 70.0,
+            r: 0.5, g: 0.0, b: 0.5, a: brightness,
+        },
+        Blob { // Blue
+            x: cx + (t * 0.6 * speed + 1.5).sin() as f32 * 140.0 + ox1,
+            y: cy + (t * 0.45 * speed + 1.0).cos() as f32 * 40.0 + oy1,
+            rx: 180.0, ry: 80.0,
+            r: 0.0, g: 0.0, b: 0.8, a: brightness * 0.9,
+        },
+        Blob { // Cyan
+            x: cx + (t * 0.8 * speed + 3.0).cos() as f32 * 100.0 + ox2,
+            y: cy + (t * 0.6 * speed + 2.0).sin() as f32 * 30.0 + oy2,
+            rx: 140.0, ry: 60.0,
+            r: 0.0, g: 0.6, b: 0.8, a: brightness * 0.85,
+        },
+        Blob { // Indigo
+            x: cx + (t * 0.55 * speed + 4.5).sin() as f32 * 130.0 + ox3,
+            y: cy + (t * 0.7 * speed + 3.5).cos() as f32 * 35.0 + oy3,
+            rx: 160.0, ry: 65.0,
+            r: 0.2, g: 0.0, b: 0.6, a: brightness * 0.9,
+        },
+    ];
+
+    // Render each blob as a radial gradient ellipse
+    for blob in &blobs {
+        let grad = tiny_skia::RadialGradient::new(
+            tiny_skia::Point::from_xy(blob.x, blob.y),
+            tiny_skia::Point::from_xy(blob.x, blob.y),
+            blob.rx, // Use the larger radius for the gradient
+        );
+        if let Some(grad) = grad {
+            // Draw a filled circle with radial gradient
+            let stops = vec![
+                tiny_skia::GradientStop::new(0.0, tiny_skia::Color::from_rgba(blob.r, blob.g, blob.b, blob.a).unwrap()),
+                tiny_skia::GradientStop::new(0.6, tiny_skia::Color::from_rgba(blob.r, blob.g, blob.b, blob.a * 0.4).unwrap()),
+                tiny_skia::GradientStop::new(1.0, tiny_skia::Color::from_rgba(blob.r, blob.g, blob.b, 0.0).unwrap()),
+            ];
+
+            if let Some(shader) = tiny_skia::RadialGradient::new(
+                tiny_skia::Point::from_xy(blob.x, blob.y),
+                tiny_skia::Point::from_xy(blob.x, blob.y),
+                blob.rx,
+            ) {
+                // Create the gradient shader manually
+                let shader = tiny_skia::LinearGradient::new(
+                    tiny_skia::Point::from_xy(0.0, 0.0),
+                    tiny_skia::Point::from_xy(1.0, 0.0),
+                    stops.clone(),
+                    tiny_skia::SpreadMode::Pad,
+                    tiny_skia::Transform::identity(),
+                );
+                // Actually, let's draw soft ellipses by compositing pixels directly
+                // This is simpler and gives us control over the elliptical shape
+            }
+        }
+
+        // Direct pixel compositing for soft elliptical blobs (fast enough at this scale)
+        let (bx0, by0) = ((blob.x - blob.rx * 1.5) as i32, (blob.y - blob.ry * 1.5) as i32);
+        let (bx1, by1) = ((blob.x + blob.rx * 1.5) as i32, (blob.y + blob.ry * 1.5) as i32);
+        let bx0 = bx0.max(0) as u32;
+        let by0 = by0.max(0) as u32;
+        let bx1 = bx1.min(pixmap.width() as i32) as u32;
+        let by1 = by1.min(pixmap.height() as i32) as u32;
+
+        let data = pixmap.data_mut();
+        let pw = pixmap.width();
+
+        for py in by0..by1 {
+            for px in bx0..bx1 {
+                let dx = (px as f32 - blob.x) / blob.rx;
+                let dy = (py as f32 - blob.y) / blob.ry;
+                let dist_sq = dx * dx + dy * dy;
+                if dist_sq > 2.25 { continue; } // 1.5^2, beyond visible range
+
+                // Gaussian-ish falloff
+                let falloff = (-dist_sq * 2.0).exp();
+                let alpha = (blob.a * falloff * 255.0) as u16;
+                if alpha == 0 { continue; }
+
+                let idx = (py * pw + px) as usize * 4;
+                if idx + 3 >= data.len() { continue; }
+
+                let sr = (blob.r * 255.0) as u16;
+                let sg = (blob.g * 255.0) as u16;
+                let sb = (blob.b * 255.0) as u16;
+
+                // Premultiplied alpha blend (additive for glow effect)
+                let pr = (sr * alpha / 255) as u8;
+                let pg = (sg * alpha / 255) as u8;
+                let pb = (sb * alpha / 255) as u8;
+                let pa = alpha as u8;
+
+                let dr = data[idx] as u16;
+                let dg = data[idx + 1] as u16;
+                let db = data[idx + 2] as u16;
+                let da = data[idx + 3] as u16;
+
+                let inv_a = 255 - alpha;
+                data[idx]     = ((pr as u16 + dr * inv_a / 255).min(255)) as u8;
+                data[idx + 1] = ((pg as u16 + dg * inv_a / 255).min(255)) as u8;
+                data[idx + 2] = ((pb as u16 + db * inv_a / 255).min(255)) as u8;
+                data[idx + 3] = ((pa as u16 + da * inv_a / 255).min(255)) as u8;
+            }
+        }
+    }
+}
+
+fn render_bars(
+    pixmap: &mut tiny_skia::Pixmap,
+    anim: &AnimState,
+    state: &OverlayState,
+    cx: f32,
+    cy: f32,
+) {
+    let start_x = cx - BARS_TOTAL_W / 2.0;
+    let is_processing = state.mode == "processing";
+    let t = anim.start_time.elapsed().as_secs_f64();
+
+    for i in 0..BAR_COUNT {
+        let bar_h = anim.bar_springs[i].val();
+        let x = start_x + i as f32 * (BAR_W + BAR_GAP);
+        let y = cy - bar_h / 2.0;
 
         let opacity = if is_processing {
-            let wave_center = -5.0 + t as f32 * 20.0;
+            let wave_t = (t % 1.2) / 1.2;
+            let wave_center = -5.0 + wave_t as f32 * 20.0;
             let dist = (i as f32 - wave_center).abs();
-            let wave = (-dist * dist / 6.0_f32).exp();
+            let wave = (-dist * dist / 6.0).exp();
             0.35 + 0.6 * wave
         } else {
             0.9
         };
 
-        let bar_path = rounded_rect(x, y, bar_w, bar_h, 1.5);
+        let bar_path = rounded_rect(x, y, BAR_W, bar_h, 1.5);
         let mut paint = tiny_skia::Paint::default();
         paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, opacity).unwrap());
         paint.anti_alias = true;
@@ -350,9 +1070,120 @@ fn draw_bars(pixmap: &mut tiny_skia::Pixmap, state: &OverlayState, w: u32, h: u3
     }
 }
 
-fn draw_mic_icon(pixmap: &mut tiny_skia::Pixmap, w: u32, h: u32) {
-    let cx = w as f32 / 2.0;
-    let cy = h as f32 / 2.0;
+fn render_hands_free_content(
+    pixmap: &mut tiny_skia::Pixmap,
+    anim: &AnimState,
+    state: &OverlayState,
+    cx: f32,
+    cy: f32,
+) {
+    let audio_bounce = if state.mode == "recording" && !state.paused {
+        let lvl = state.level.min(1.0);
+        1.0 + lvl.powf(1.5) * 0.25
+    } else {
+        1.0
+    };
+
+    // Bars in center
+    if state.paused {
+        render_flat_bars(pixmap, cx, cy);
+    } else {
+        render_bars(pixmap, anim, state, cx, cy);
+    }
+
+    // Pause button (left)
+    let pause_cx = cx - 49.0 * audio_bounce;
+    render_circle_button(pixmap, pause_cx, cy, 13.0, [255, 255, 255, 38]); // bg
+    if state.paused {
+        // Play triangle
+        draw_play_icon(pixmap, pause_cx, cy);
+    } else {
+        // Pause bars
+        draw_pause_icon(pixmap, pause_cx, cy);
+    }
+
+    // Stop button (right)
+    let stop_cx = cx + 49.0 * audio_bounce;
+    render_circle_button(pixmap, stop_cx, cy, 13.0, [217, 48, 48, 217]); // red bg
+    draw_stop_icon(pixmap, stop_cx, cy);
+}
+
+fn render_flat_bars(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32) {
+    let start_x = cx - BARS_TOTAL_W / 2.0;
+    for i in 0..BAR_COUNT {
+        let x = start_x + i as f32 * (BAR_W + BAR_GAP);
+        let y = cy - BAR_MIN_H / 2.0;
+        let bar_path = rounded_rect(x, y, BAR_W, BAR_MIN_H, 1.5);
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.25).unwrap());
+        paint.anti_alias = true;
+        pixmap.fill_path(&bar_path, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+    }
+}
+
+fn render_circle_button(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, r: f32, color: [u8; 4]) {
+    let mut pb = tiny_skia::PathBuilder::new();
+    // Approximate circle with 4 cubic beziers
+    let k = 0.5522847498; // magic number for circle approximation
+    let kr = k * r;
+    pb.move_to(cx, cy - r);
+    pb.cubic_to(cx + kr, cy - r, cx + r, cy - kr, cx + r, cy);
+    pb.cubic_to(cx + r, cy + kr, cx + kr, cy + r, cx, cy + r);
+    pb.cubic_to(cx - kr, cy + r, cx - r, cy + kr, cx - r, cy);
+    pb.cubic_to(cx - r, cy - kr, cx - kr, cy - r, cx, cy - r);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        let mut paint = tiny_skia::Paint::default();
+        paint.set_color(tiny_skia::Color::from_rgba(
+            color[0] as f32 / 255.0,
+            color[1] as f32 / 255.0,
+            color[2] as f32 / 255.0,
+            color[3] as f32 / 255.0,
+        ).unwrap());
+        paint.anti_alias = true;
+        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+    }
+}
+
+fn draw_pause_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32) {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.9).unwrap());
+    paint.anti_alias = true;
+    // Two vertical bars
+    let bar_w = 2.5;
+    let bar_h = 10.0;
+    let gap = 3.5;
+    let left = rounded_rect(cx - gap / 2.0 - bar_w, cy - bar_h / 2.0, bar_w, bar_h, 1.0);
+    let right = rounded_rect(cx + gap / 2.0, cy - bar_h / 2.0, bar_w, bar_h, 1.0);
+    pixmap.fill_path(&left, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+    pixmap.fill_path(&right, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+}
+
+fn draw_play_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32) {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.9).unwrap());
+    paint.anti_alias = true;
+    let mut pb = tiny_skia::PathBuilder::new();
+    let size = 6.0;
+    pb.move_to(cx - size * 0.4, cy - size);
+    pb.line_to(cx + size * 0.8, cy);
+    pb.line_to(cx - size * 0.4, cy + size);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+    }
+}
+
+fn draw_stop_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32) {
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 1.0).unwrap());
+    paint.anti_alias = true;
+    let size = 4.5;
+    let rect = rounded_rect(cx - size, cy - size, size * 2.0, size * 2.0, 1.5);
+    pixmap.fill_path(&rect, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+}
+
+fn draw_mic_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32) {
     let mut paint = tiny_skia::Paint::default();
     paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.9).unwrap());
     paint.anti_alias = true;
@@ -361,10 +1192,9 @@ fn draw_mic_icon(pixmap: &mut tiny_skia::Pixmap, w: u32, h: u32) {
     let mic = rounded_rect(cx - 4.0, cy - 9.0, 8.0, 13.0, 4.0);
     pixmap.fill_path(&mic, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
 
-    // Mic arc (simplified as a thicker stroke arc approximated by lines)
+    // Mic arc
     let stroke = tiny_skia::Stroke { width: 1.5, ..Default::default() };
     let mut pb = tiny_skia::PathBuilder::new();
-    // Approximate arc with bezier
     pb.move_to(cx - 7.0, cy);
     pb.cubic_to(cx - 7.0, cy + 6.0, cx - 4.0, cy + 9.0, cx, cy + 9.0);
     pb.cubic_to(cx + 4.0, cy + 9.0, cx + 7.0, cy + 6.0, cx + 7.0, cy);
@@ -381,34 +1211,165 @@ fn draw_mic_icon(pixmap: &mut tiny_skia::Pixmap, w: u32, h: u32) {
     }
 }
 
-/// Create a rounded rectangle path.
+fn render_error_content(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &FontRenderer,
+    message: &str,
+    cx: f32,
+    cy: f32,
+) {
+    // Warning triangle icon (simplified)
+    let mut paint = tiny_skia::Paint::default();
+    paint.set_color(tiny_skia::Color::from_rgba(0.9, 0.2, 0.2, 1.0).unwrap());
+    paint.anti_alias = true;
+    let icon_x = cx - font.measure(message, 11.0) / 2.0 - 14.0;
+    let mut pb = tiny_skia::PathBuilder::new();
+    let s = 6.0;
+    pb.move_to(icon_x, cy + s * 0.6);
+    pb.line_to(icon_x + s, cy + s * 0.6);
+    pb.line_to(icon_x + s / 2.0, cy - s * 0.6);
+    pb.close();
+    if let Some(path) = pb.finish() {
+        pixmap.fill_path(&path, &paint, tiny_skia::FillRule::Winding, Default::default(), None);
+    }
+
+    // Error text
+    font.render(
+        pixmap,
+        message,
+        icon_x + 14.0,
+        cy + 4.0,
+        11.0,
+        [255, 255, 255, 230],
+    );
+}
+
+fn render_onboarding_card(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &FontRenderer,
+    step: &OnboardingStep,
+    hotkey_label: &str,
+    cx: f32,
+    cy: f32,
+) {
+    let text = onboarding_card_text(step, hotkey_label);
+    let font_size = 14.0;
+    let text_w = font.measure(&text, font_size);
+    let pad_h = 16.0;
+    let pad_v = 10.0;
+    let card_w = text_w + pad_h * 2.0;
+    let card_h = font_size + pad_v * 2.0;
+    let card_r = card_h / 2.0;
+
+    let card_x = cx - card_w / 2.0;
+    let card_y = cy - card_h / 2.0;
+
+    // Card background
+    let card_path = rounded_rect(card_x, card_y, card_w, card_h, card_r);
+    let mut bg_paint = tiny_skia::Paint::default();
+    bg_paint.set_color(tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, 0.75).unwrap());
+    bg_paint.anti_alias = true;
+    pixmap.fill_path(&card_path, &bg_paint, tiny_skia::FillRule::Winding, Default::default(), None);
+
+    // Card border
+    let mut border_paint = tiny_skia::Paint::default();
+    border_paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.3).unwrap());
+    border_paint.anti_alias = true;
+    let stroke = tiny_skia::Stroke { width: 1.0, ..Default::default() };
+    pixmap.stroke_path(&card_path, &border_paint, &stroke, Default::default(), None);
+
+    // Card text
+    font.render_centered(pixmap, &text, cx, cy + font_size * 0.35, font_size, [255, 255, 255, 230]);
+}
+
+fn render_keycap(
+    pixmap: &mut tiny_skia::Pixmap,
+    font: &Option<FontRenderer>,
+    label: &str,
+    x: f32,
+    cy: f32,
+    font_size: f32,
+) {
+    let fr = match font {
+        Some(f) => f,
+        None => return,
+    };
+    let text_w = fr.measure(label, font_size);
+    let pad = 10.0;
+    let kw = text_w + pad * 2.0;
+    let kh = font_size + 10.0;
+    let ky = cy - kh / 2.0;
+
+    // Keycap background
+    let key_path = rounded_rect(x, ky, kw, kh, 5.0);
+    let mut bg = tiny_skia::Paint::default();
+    bg.set_color(tiny_skia::Color::from_rgba(0.25, 0.25, 0.25, 1.0).unwrap());
+    bg.anti_alias = true;
+    pixmap.fill_path(&key_path, &bg, tiny_skia::FillRule::Winding, Default::default(), None);
+
+    // Keycap border
+    let mut border = tiny_skia::Paint::default();
+    border.set_color(tiny_skia::Color::from_rgba(0.45, 0.45, 0.45, 1.0).unwrap());
+    border.anti_alias = true;
+    let stroke = tiny_skia::Stroke { width: 1.0, ..Default::default() };
+    pixmap.stroke_path(&key_path, &border, &stroke, Default::default(), None);
+
+    // Keycap text
+    fr.render_centered(pixmap, label, x + kw / 2.0, cy + font_size * 0.35, font_size, [255, 255, 255, 255]);
+}
+
+fn onboarding_card_text(step: &OnboardingStep, hotkey_label: &str) -> String {
+    match step {
+        OnboardingStep::TryIt => format!("Hold {} and speak \u{2014} Yap transcribes it", hotkey_label),
+        OnboardingStep::Nice => {
+            let msgs = ["Nice!", "Nailed it!", "Sounds good!", "Got it!", "Perfect!", "Love it!"];
+            msgs[rand::random::<usize>() % msgs.len()].to_string()
+        }
+        OnboardingStep::DoubleTapTip => format!("Double-tap {} for hands-free transcription", hotkey_label),
+        OnboardingStep::ClickTip => "Click the pill for hands-free transcription".to_string(),
+        OnboardingStep::ApiTip => "Add an API key in the menu bar for better transcription".to_string(),
+        OnboardingStep::FormattingTip => "Enable formatting in Settings to clean up grammar automatically".to_string(),
+        OnboardingStep::Welcome => "You're all set \u{2014} enjoy!".to_string(),
+        OnboardingStep::SpeakTip => format!("Didn't catch that \u{2014} speak up while holding {}", hotkey_label),
+        OnboardingStep::HoldTip => format!("Hold {} \u{2014} don't just tap it", hotkey_label),
+    }
+}
+
+fn format_elapsed(seconds: f64) -> String {
+    let s = seconds as u64;
+    format!("{}:{:02}", s / 60, s % 60)
+}
+
+// ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
 fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> tiny_skia::Path {
     let r = r.min(w / 2.0).min(h / 2.0);
+    let k = 0.5522847498 * r; // kappa for cubic bezier circle approximation
     let mut pb = tiny_skia::PathBuilder::new();
-    // Top-left to top-right
     pb.move_to(x + r, y);
     pb.line_to(x + w - r, y);
-    pb.cubic_to(x + w, y, x + w, y, x + w, y + r);
-    // Right side
+    pb.cubic_to(x + w - r + k, y, x + w, y + r - k, x + w, y + r);
     pb.line_to(x + w, y + h - r);
-    pb.cubic_to(x + w, y + h, x + w, y + h, x + w - r, y + h);
-    // Bottom
+    pb.cubic_to(x + w, y + h - r + k, x + w - r + k, y + h, x + w - r, y + h);
     pb.line_to(x + r, y + h);
-    pb.cubic_to(x, y + h, x, y + h, x, y + h - r);
-    // Left side
+    pb.cubic_to(x + r - k, y + h, x, y + h - r + k, x, y + h - r);
     pb.line_to(x, y + r);
-    pb.cubic_to(x, y, x, y, x + r, y);
+    pb.cubic_to(x, y + r - k, x + r - k, y, x + r, y);
     pb.close();
     pb.finish().unwrap()
 }
 
-/// Blit a tiny-skia Pixmap to the Win32 layered window.
+// ---------------------------------------------------------------------------
+// Blit to layered window
+// ---------------------------------------------------------------------------
+
 fn blit_to_layered_window(hwnd: HWND, pixmap: &tiny_skia::Pixmap, w: u32, h: u32) {
     unsafe {
         let hdc_screen = GetDC(None);
         let hdc_mem = CreateCompatibleDC(Some(hdc_screen));
 
-        // Create a 32-bit BGRA DIB section
         let bmi = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
@@ -416,7 +1377,7 @@ fn blit_to_layered_window(hwnd: HWND, pixmap: &tiny_skia::Pixmap, w: u32, h: u32
                 biHeight: -(h as i32), // top-down
                 biPlanes: 1,
                 biBitCount: 32,
-                biCompression: 0, // BI_RGB
+                biCompression: 0,
                 ..Default::default()
             },
             ..Default::default()
@@ -427,7 +1388,7 @@ fn blit_to_layered_window(hwnd: HWND, pixmap: &tiny_skia::Pixmap, w: u32, h: u32
             .unwrap();
         let old = SelectObject(hdc_mem, hbm);
 
-        // Copy pixel data (tiny-skia is RGBA premultiplied, Win32 wants BGRA premultiplied)
+        // Convert RGBA premultiplied → BGRA premultiplied
         let src = pixmap.data();
         let dst = std::slice::from_raw_parts_mut(bits as *mut u8, (w * h * 4) as usize);
         for i in (0..dst.len()).step_by(4) {
@@ -437,20 +1398,17 @@ fn blit_to_layered_window(hwnd: HWND, pixmap: &tiny_skia::Pixmap, w: u32, h: u32
             dst[i + 3] = src[i + 3]; // A
         }
 
-        // UpdateLayeredWindow for per-pixel alpha
         let mut pt_src = POINT { x: 0, y: 0 };
         let mut size = SIZE { cx: w as i32, cy: h as i32 };
-
-        // Get current window position
         let mut rect = RECT::default();
         let _ = GetWindowRect(hwnd, &mut rect);
         let mut pt_dst = POINT { x: rect.left, y: rect.top };
 
         let blend = BLENDFUNCTION {
-            BlendOp: 0,       // AC_SRC_OVER
+            BlendOp: 0,
             BlendFlags: 0,
             SourceConstantAlpha: 255,
-            AlphaFormat: 1,   // AC_SRC_ALPHA
+            AlphaFormat: 1,
         };
 
         let _ = UpdateLayeredWindow(
@@ -465,7 +1423,6 @@ fn blit_to_layered_window(hwnd: HWND, pixmap: &tiny_skia::Pixmap, w: u32, h: u32
             ULW_ALPHA,
         );
 
-        // Cleanup
         SelectObject(hdc_mem, old);
         let _ = DeleteObject(hbm);
         let _ = DeleteDC(hdc_mem);
