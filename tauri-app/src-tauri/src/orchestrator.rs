@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use rand::prelude::IndexedRandom;
 use serde::Serialize;
@@ -23,6 +23,10 @@ use crate::paste;
 use crate::transcription::{self, TranscriptionOptions, TranscriptionProvider};
 use crate::tray;
 
+const SHORT_TAP_TIP_GRACE: Duration =
+    Duration::from_millis((hotkey::DOUBLE_TAP_WINDOW * 1000.0) as u64 + 100);
+const HOLD_TO_RECORD_DELAY: Duration = Duration::from_millis(250);
+
 // ---------------------------------------------------------------------------
 // State machine
 // ---------------------------------------------------------------------------
@@ -31,7 +35,9 @@ use crate::tray;
 #[serde(rename_all = "camelCase")]
 pub enum AppState {
     Idle,
+    PressPending,
     Recording,
+    TapPending,
     HandsFreeRecording,
     HandsFreePaused,
     Processing,
@@ -182,6 +188,9 @@ struct OrchestratorInner {
     peak_level: f32,
     /// Timestamp when the current recording started.
     recording_start: Option<Instant>,
+    /// Monotonic id for the active/most recent recording attempt. Used to
+    /// cancel delayed feedback from a tap that became part of a double-tap.
+    recording_generation: u64,
     /// Whether we should ignore the next key-up event (hands-free entered
     /// while the hotkey was still held from the initial key-down).
     ignore_pending_key_up: bool,
@@ -206,6 +215,37 @@ struct OrchestratorInner {
 }
 
 impl OrchestratorInner {
+    fn begin_press_pending(&mut self) -> u64 {
+        self.state = AppState::PressPending;
+        self.recording_start = Some(Instant::now());
+        self.peak_level = 0.0;
+        self.recording_generation = self.recording_generation.wrapping_add(1);
+        let generation = self.recording_generation;
+        self.emit_state();
+        generation
+    }
+
+    fn begin_recording(&mut self) -> u64 {
+        self.state = AppState::Recording;
+        self.recording_start = Some(Instant::now());
+        self.peak_level = 0.0;
+        self.recording_generation = self.recording_generation.wrapping_add(1);
+        let generation = self.recording_generation;
+        self.emit_state();
+        generation
+    }
+
+    fn activate_pending_recording(&mut self, generation: u64) -> bool {
+        if self.state != AppState::PressPending || self.recording_generation != generation {
+            return false;
+        }
+        self.state = AppState::Recording;
+        self.recording_start = Some(Instant::now());
+        self.peak_level = 0.0;
+        self.emit_state();
+        true
+    }
+
     /// Emit an overlay display state to every renderer without changing the
     /// app's internal pipeline state. Used for prompt-only states like
     /// noSpeech, which are visual states rather than AppState variants.
@@ -251,7 +291,9 @@ impl OrchestratorInner {
         // Map internal state to simplified frontend state string
         let state_str = match self.state {
             AppState::Idle => "idle",
+            AppState::PressPending => "recording",
             AppState::Recording => "recording",
+            AppState::TapPending => "recording",
             AppState::HandsFreeRecording => "recording",
             AppState::HandsFreePaused => "recording",
             AppState::Processing => "processing",
@@ -272,6 +314,18 @@ impl OrchestratorInner {
                 (Some(true), Some(true), Some(elapsed))
             }
             AppState::Recording => {
+                let elapsed = self.recording_start
+                    .map(|s| s.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                (Some(false), None, Some(elapsed))
+            }
+            AppState::PressPending => {
+                let elapsed = self.recording_start
+                    .map(|s| s.elapsed().as_secs_f64())
+                    .unwrap_or(0.0);
+                (Some(false), None, Some(elapsed))
+            }
+            AppState::TapPending => {
                 let elapsed = self.recording_start
                     .map(|s| s.elapsed().as_secs_f64())
                     .unwrap_or(0.0);
@@ -384,6 +438,7 @@ impl Orchestrator {
                 enabled: true,
                 peak_level: 0.0,
                 recording_start: None,
+                recording_generation: 0,
                 ignore_pending_key_up: false,
                 app,
                 onboarding_step: None,
@@ -404,6 +459,25 @@ impl Orchestrator {
 
     fn app_handle(&self) -> AppHandle {
         self.inner.lock().unwrap().app.clone()
+    }
+
+    fn begin_press_to_record(&self, inner: &mut OrchestratorInner) -> u64 {
+        let generation = inner.begin_press_pending();
+        let app = inner.app.clone();
+        let orch = app.state::<Arc<Orchestrator>>();
+        let orch = Arc::clone(&orch);
+        std::thread::spawn(move || {
+            std::thread::sleep(HOLD_TO_RECORD_DELAY);
+            let should_start = {
+                let mut inner = orch.inner.lock().unwrap();
+                inner.activate_pending_recording(generation)
+            };
+            if should_start {
+                play_sound(&app, "Blow");
+                orch.start_audio_capture(generation);
+            }
+        });
+        generation
     }
 
     // -- Key event handlers -----------------------------------------------
@@ -457,10 +531,12 @@ impl Orchestrator {
                             if start.elapsed().as_millis() >= 550 {
                                 inner.hold_confirm_start = None;
                                 let _ = inner.app.emit("onboarding:press", false);
-            #[cfg(target_os = "macos")]
-            crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
-            #[cfg(target_os = "windows")]
-            crate::win_overlay::update_state(|st| st.is_pressed = false);
+                                #[cfg(target_os = "macos")]
+                                crate::sidecar::send(
+                                    &crate::sidecar::OutMessage::OnboardingPress { pressed: false },
+                                );
+                                #[cfg(target_os = "windows")]
+                                crate::win_overlay::update_state(|st| st.is_pressed = false);
                                 play_sound(&inner.app, "Pop");
                                 drop(inner);
                                 // Small delay then advance
@@ -480,37 +556,20 @@ impl Orchestrator {
                     if !inner.enabled || inner.state != AppState::Idle {
                         return;
                     }
-                    inner.state = AppState::Recording;
-                    inner.recording_start = Some(Instant::now());
-                    inner.peak_level = 0.0;
-                    inner.emit_state();
-                    drop(inner);
-                    self.start_audio_capture();
+                    self.begin_press_to_record(&mut inner);
                     return;
                 }
             }
         }
 
-        inner.state = AppState::Recording;
-        inner.recording_start = Some(Instant::now());
-        inner.peak_level = 0.0;
-        inner.emit_state();
-        drop(inner);
-
-        self.start_audio_capture();
+        self.begin_press_to_record(&mut inner);
     }
 
     /// Internal helper to start audio capture (shared by on_key_down paths).
-    fn start_audio_capture(&self) {
+    fn start_audio_capture(&self, _generation: u64) {
         match start_configured_recording() {
             Ok(_path) => {
                 log::info("Recording started");
-                // Play start sound delayed 100ms
-                let app = self.app_handle();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    play_sound(&app, "Blow");
-                });
             }
             Err(e) => {
                 log::info(&format!("Failed to start recording: {e}"));
@@ -535,6 +594,30 @@ impl Orchestrator {
             crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed: false });
             #[cfg(target_os = "windows")]
             crate::win_overlay::update_state(|st| st.is_pressed = false);
+            return;
+        }
+
+        if inner.state == AppState::PressPending {
+            log::info("Quick tap -- waiting for possible double-tap");
+            let app = inner.app.clone();
+            let generation = inner.recording_generation;
+            inner.state = AppState::TapPending;
+            inner.emit_state();
+            drop(inner);
+
+            let orch = app.state::<Arc<Orchestrator>>();
+            let orch = Arc::clone(&orch);
+            std::thread::spawn(move || {
+                std::thread::sleep(SHORT_TAP_TIP_GRACE);
+                let should_show_tip = {
+                    let inner = orch.inner.lock().unwrap();
+                    inner.state == AppState::TapPending && inner.recording_generation == generation
+                };
+                if should_show_tip {
+                    log::info("Quick tap -- showing holdTip");
+                    orch.show_tip(OnboardingStep::HoldTip);
+                }
+            });
             return;
         }
 
@@ -565,13 +648,28 @@ impl Orchestrator {
 
         // Too-short tap with low peak: show holdTip
         if duration < 0.5 && peak < 0.15 {
-            log::info("Too short / quiet -- showing holdTip");
+            log::info("Too short / quiet -- waiting for possible double-tap");
             let _ = audio::stop_recording(); // discard
-            {
+            let (app, generation) = {
                 let mut inner = self.inner.lock().unwrap();
-                inner.state = AppState::Idle;
-            }
-            self.show_tip(OnboardingStep::HoldTip);
+                inner.state = AppState::TapPending;
+                inner.emit_state();
+                (inner.app.clone(), inner.recording_generation)
+            };
+
+            let orch = app.state::<Arc<Orchestrator>>();
+            let orch = Arc::clone(&orch);
+            std::thread::spawn(move || {
+                std::thread::sleep(SHORT_TAP_TIP_GRACE);
+                let should_show_tip = {
+                    let inner = orch.inner.lock().unwrap();
+                    inner.state == AppState::TapPending && inner.recording_generation == generation
+                };
+                if should_show_tip {
+                    log::info("Too short / quiet -- showing holdTip");
+                    orch.show_tip(OnboardingStep::HoldTip);
+                }
+            });
             return;
         }
 
@@ -600,7 +698,7 @@ impl Orchestrator {
                 inner.emit_state();
                 log::info("Converted to hands-free recording");
             }
-            AppState::Idle => {
+            AppState::Idle | AppState::PressPending | AppState::TapPending => {
                 // Dismiss any transient tip overlay before starting
                 if on_double_tap_tip {
                     drop(inner);
@@ -609,22 +707,16 @@ impl Orchestrator {
                     if !inner.enabled {
                         return;
                     }
-                    inner.state = AppState::Recording;
-                    inner.recording_start = Some(Instant::now());
-                    inner.peak_level = 0.0;
-                    inner.emit_state();
+                    inner.begin_recording();
                     drop(inner);
                 } else {
-                    inner.state = AppState::Recording;
-                    inner.recording_start = Some(Instant::now());
-                    inner.peak_level = 0.0;
-                    inner.emit_state();
+                    inner.begin_recording();
                     drop(inner);
                 }
 
+                play_sound(&self.app_handle(), "Blow");
                 match start_configured_recording() {
                     Ok(_) => {
-                        play_sound(&self.app_handle(), "Blow");
                         let mut inner = self.inner.lock().unwrap();
                         inner.state = AppState::HandsFreeRecording;
                         inner.ignore_pending_key_up = true;
@@ -694,7 +786,11 @@ impl Orchestrator {
         // new recording from idle.
         let is_active = matches!(
             inner.state,
-            AppState::Recording | AppState::HandsFreeRecording | AppState::HandsFreePaused
+            AppState::Recording
+                | AppState::PressPending
+                | AppState::TapPending
+                | AppState::HandsFreeRecording
+                | AppState::HandsFreePaused
         );
 
         if !is_active {
@@ -709,15 +805,12 @@ impl Orchestrator {
         match inner.state {
             AppState::Idle => {
                 // Start click-to-record (hands-free)
-                inner.state = AppState::Recording;
-                inner.recording_start = Some(Instant::now());
-                inner.peak_level = 0.0;
-                inner.emit_state();
+                inner.begin_recording();
                 drop(inner);
 
+                play_sound(&self.app_handle(), "Blow");
                 match start_configured_recording() {
                     Ok(_) => {
-                        play_sound(&self.app_handle(), "Blow");
                         let mut inner = self.inner.lock().unwrap();
                         inner.state = AppState::HandsFreeRecording;
                         inner.ignore_pending_key_up = false;
@@ -738,6 +831,12 @@ impl Orchestrator {
                 inner.ignore_pending_key_up = true;
                 inner.emit_state();
                 log::info("Pill click: converted to hands-free");
+            }
+            AppState::PressPending => {
+                // Ignore while waiting to decide whether this press is a tap or hold.
+            }
+            AppState::TapPending => {
+                // Ignore while a short tap is waiting to become a double-tap or a hold tip.
             }
             AppState::HandsFreeRecording | AppState::HandsFreePaused => {
                 // Ignore pill body clicks in hands-free mode.
@@ -1038,6 +1137,8 @@ impl Orchestrator {
     // -- Core pipeline (stop recording, transcribe, format, paste) --------
 
     fn stop_and_process(&self) {
+        hotkey::clear_tap_sequence();
+
         // Stop the audio recorder and get the WAV path
         let wav_path = match audio::stop_recording() {
             Ok(p) => p,
@@ -1211,11 +1312,9 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
     // API costs on silence/noise that slipped past the peak-level gate.
     if cfg.tx_provider != TranscriptionProvider::None {
         let check_path = wav_path.clone();
-        let has_speech = tokio::task::spawn_blocking(move || {
-            crate::speech::pre_check(&check_path)
-        })
-        .await
-        .unwrap_or(true); // if the task panics, proceed anyway
+        let has_speech = tokio::task::spawn_blocking(move || crate::speech::pre_check(&check_path))
+            .await
+            .unwrap_or(true); // if the task panics, proceed anyway
 
         if !has_speech {
             return Err("No speech detected".to_string());
@@ -1335,7 +1434,8 @@ pub(crate) fn play_sound(app: &AppHandle, name: &str) {
                     if let Ok(file) = std::fs::File::open(&path) {
                         let source = rodio::Decoder::new(std::io::BufReader::new(file));
                         if let Ok(source) = source {
-                            let _ = stream_handle.play_raw(rodio::source::Source::convert_samples(source));
+                            let _ = stream_handle
+                                .play_raw(rodio::source::Source::convert_samples(source));
                             // Keep thread alive while audio plays
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
@@ -1411,7 +1511,6 @@ fn start_level_poller(orch: Arc<Orchestrator>) {
         })
         .expect("failed to spawn level poller thread");
 }
-
 
 // ---------------------------------------------------------------------------
 // Initialization (called from lib.rs setup)

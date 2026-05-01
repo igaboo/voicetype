@@ -86,19 +86,34 @@ class OverlayPanel: NSPanel {
         updatePillTarget()
     }
 
-    private var onScreenY: CGFloat {
+    private var onScreenFrame: NSRect {
         let screenFrame = NSScreen.main?.frame ?? OverlayLayout.fallbackScreenFrame
-        return screenFrame.minY + OverlayLayout.visiblePanelBottomInset - frame.height
+        return NSRect(
+            x: screenFrame.midX - frame.width / 2,
+            y: screenFrame.minY + OverlayLayout.visiblePanelBottomInset - frame.height,
+            width: frame.width,
+            height: frame.height
+        )
     }
 
-    private var offScreenY: CGFloat {
+    private var offScreenFrame: NSRect {
         let screenFrame = NSScreen.main?.frame ?? OverlayLayout.fallbackScreenFrame
-        return screenFrame.minY - frame.height
+        return NSRect(
+            x: screenFrame.midX - frame.width / 2,
+            y: screenFrame.minY - frame.height,
+            width: frame.width,
+            height: frame.height
+        )
+    }
+
+    private func showAtRest() {
+        setFrame(onScreenFrame, display: true)
+        orderFront(nil)
     }
 
     private func slideIn() {
         orderFront(nil)
-        let target = NSRect(x: frame.origin.x, y: onScreenY, width: frame.width, height: frame.height)
+        let target = onScreenFrame
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.5
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
@@ -107,7 +122,7 @@ class OverlayPanel: NSPanel {
     }
 
     private func slideOut() {
-        let target = NSRect(x: frame.origin.x, y: offScreenY, width: frame.width, height: frame.height)
+        let target = offScreenFrame
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.4
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
@@ -128,7 +143,7 @@ class OverlayPanel: NSPanel {
             if wasIdle {
                 overlayState.audioLevel = 0
                 alphaValue = 1
-                if !overlayState.alwaysVisible { slideIn() } else { orderFront(nil) }
+                if !overlayState.alwaysVisible { slideIn() } else { showAtRest() }
             }
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.5)) {
                 overlayState.mode = .recording
@@ -191,7 +206,7 @@ class OverlayPanel: NSPanel {
                 overlayState.onboardingStep = parsed
             }
             overlayState.onboardingText = text ?? ""
-            orderFront(nil)
+            showAtRest()
         } else {
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
                 overlayState.onboardingStep = nil
@@ -216,7 +231,7 @@ class OverlayPanel: NSPanel {
         if let visible = alwaysVisible {
             overlayState.alwaysVisible = visible
             guard overlayState.mode == .idle && overlayState.onboardingStep == nil else { return }
-            if visible { slideIn() } else { slideOut() }
+            if visible { showAtRest() } else { slideOut() }
         }
     }
 

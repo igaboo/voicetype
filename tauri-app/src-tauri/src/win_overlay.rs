@@ -52,6 +52,8 @@ const PROCESSING_SCALE: f32 = 0.8;
 const PRESS_SCALE: f32 = 0.85;
 const CELEBRATION_DURATION: Duration = Duration::from_millis(3000);
 const FULL_CIRCLE: f64 = std::f64::consts::PI * 2.0;
+const FRAME_INTERVAL_MS: u32 = 16;
+const MAX_ANIMATION_DT: f32 = 1.0 / 30.0;
 
 // Pill geometry
 const BAR_COUNT: usize = 11;
@@ -240,6 +242,7 @@ struct AnimState {
     prev_mode: String,
     prev_onboarding_step: Option<OnboardingStep>,
     start_time: Instant,
+    last_frame: Instant,
     visible: bool, // Whether overlay should be visible at all
 }
 
@@ -259,6 +262,7 @@ impl AnimState {
             prev_mode: "idle".into(),
             prev_onboarding_step: None,
             start_time: Instant::now(),
+            last_frame: Instant::now(),
             visible: true,
         }
     }
@@ -668,8 +672,9 @@ unsafe fn run_window_loop() {
     render_frame(hwnd, &mut anim, &font);
     let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
 
-    // 33ms timer ≈ 30fps
-    let _ = SetTimer(hwnd, 1, 33, None);
+    // 16ms timer gives the native gradient the same visual cadence as the
+    // Svelte/CSS renderer on platforms where that path is used.
+    let _ = SetTimer(hwnd, 1, FRAME_INTERVAL_MS, None);
 
     // Store animation + font state in window's user data
     let ctx = Box::new(RenderContext { anim, font });
@@ -982,8 +987,16 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
         None => return,
     };
 
-    // Advance animation
-    anim.tick(&state, 0.033); // ~30fps
+    // Advance animation using real frame time so timer jitter does not turn
+    // spring movement into visible jumps.
+    let now = Instant::now();
+    let mut dt = now.duration_since(anim.last_frame).as_secs_f32();
+    if dt <= 0.0 {
+        dt = 1.0 / 60.0;
+    }
+    dt = dt.min(MAX_ANIMATION_DT);
+    anim.last_frame = now;
+    anim.tick(&state, dt);
 
     let w = CANVAS_W as u32;
     let h = CANVAS_H as u32;
@@ -1166,8 +1179,10 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
 fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy: f32) {
     let energy = anim.gradient_energy.val();
     let t = anim.start_time.elapsed().as_secs_f64();
-    let speed = 0.4 + energy as f64 * 0.6;
-    let brightness = 0.25 + energy * 0.25;
+    let speed = 0.22 + energy as f64 * 0.18;
+    let brightness = 0.18 + energy * 0.28;
+    let group_x = (t * 0.42 * speed).cos() as f32 * 18.0;
+    let group_y = (t * 0.34 * speed).sin() as f32 * 8.0;
 
     // Celebration orbit
     let (ox0, oy0, ox1, oy1, ox2, oy2, ox3, oy3) = if let Some(start) = anim.celebration_start {
@@ -1175,7 +1190,7 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
             (start.elapsed().as_secs_f64() / CELEBRATION_DURATION.as_secs_f64()).min(1.0);
         let p = progress * FULL_CIRCLE * 2.0;
         let envelope = (p / 4.0).sin().max(0.0) as f32;
-        let r = 150.0 * envelope;
+        let r = 70.0 * envelope;
         (
             p.cos() as f32 * r,
             p.sin() as f32 * r,
@@ -1190,7 +1205,9 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
         (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     };
 
-    // Four gradient blobs — each is a large radial gradient circle
+    // Four oversized, overlapping ellipses. Windows layered windows do not get
+    // the CSS blur used by the Svelte path, so the softness is baked into a
+    // broad falloff and slow grouped motion instead of obvious orbiting.
     struct Blob {
         x: f32,
         y: f32,
@@ -1204,48 +1221,44 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
 
     let blobs = [
         Blob {
-            // Purple
-            x: cx + (t * 0.7 * speed).cos() as f32 * 80.0 + ox0,
-            y: cy + 18.0 + (t * 0.5 * speed).sin() as f32 * 26.0 + oy0,
-            rx: 110.0,
-            ry: 52.0,
+            x: cx + group_x - 44.0 + (t * 0.58 * speed).sin() as f32 * 13.0 + ox0,
+            y: cy + 24.0 + group_y + (t * 0.43 * speed).cos() as f32 * 7.0 + oy0,
+            rx: 180.0,
+            ry: 92.0,
             r: 147.0 / 255.0,
             g: 51.0 / 255.0,
             b: 234.0 / 255.0,
-            a: brightness,
+            a: brightness * 0.72,
         },
         Blob {
-            // Blue
-            x: cx + (t * 0.6 * speed + 1.5).sin() as f32 * 92.0 + ox1,
-            y: cy + 20.0 + (t * 0.45 * speed + 1.0).cos() as f32 * 30.0 + oy1,
-            rx: 130.0,
-            ry: 60.0,
+            x: cx + group_x + 38.0 + (t * 0.5 * speed + 1.3).cos() as f32 * 15.0 + ox1,
+            y: cy + 30.0 + group_y + (t * 0.37 * speed + 0.8).sin() as f32 * 9.0 + oy1,
+            rx: 210.0,
+            ry: 104.0,
             r: 59.0 / 255.0,
             g: 130.0 / 255.0,
             b: 246.0 / 255.0,
-            a: brightness * 0.9,
+            a: brightness * 0.68,
         },
         Blob {
-            // Cyan
-            x: cx + (t * 0.8 * speed + 3.0).cos() as f32 * 68.0 + ox2,
-            y: cy + 22.0 + (t * 0.6 * speed + 2.0).sin() as f32 * 24.0 + oy2,
-            rx: 102.0,
-            ry: 47.0,
+            x: cx + group_x - 16.0 + (t * 0.46 * speed + 2.6).sin() as f32 * 12.0 + ox2,
+            y: cy + 38.0 + group_y + (t * 0.41 * speed + 1.9).cos() as f32 * 8.0 + oy2,
+            rx: 168.0,
+            ry: 84.0,
             r: 34.0 / 255.0,
             g: 211.0 / 255.0,
             b: 238.0 / 255.0,
-            a: brightness * 0.85,
+            a: brightness * 0.56,
         },
         Blob {
-            // Indigo
-            x: cx + (t * 0.55 * speed + 4.5).sin() as f32 * 86.0 + ox3,
-            y: cy + 19.0 + (t * 0.7 * speed + 3.5).cos() as f32 * 26.0 + oy3,
-            rx: 118.0,
-            ry: 51.0,
+            x: cx + group_x + 10.0 + (t * 0.39 * speed + 4.1).cos() as f32 * 14.0 + ox3,
+            y: cy + 20.0 + group_y + (t * 0.52 * speed + 3.4).sin() as f32 * 7.0 + oy3,
+            rx: 194.0,
+            ry: 94.0,
             r: 99.0 / 255.0,
             g: 102.0 / 255.0,
             b: 241.0 / 255.0,
-            a: brightness * 0.9,
+            a: brightness * 0.64,
         },
     ];
 
@@ -1253,12 +1266,12 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
     for blob in &blobs {
         // Direct pixel compositing for soft elliptical blobs (fast enough at this scale)
         let (bx0, by0) = (
-            (blob.x - blob.rx * 1.5) as i32,
-            (blob.y - blob.ry * 1.5) as i32,
+            (blob.x - blob.rx * 1.9) as i32,
+            (blob.y - blob.ry * 1.9) as i32,
         );
         let (bx1, by1) = (
-            (blob.x + blob.rx * 1.5) as i32,
-            (blob.y + blob.ry * 1.5) as i32,
+            (blob.x + blob.rx * 1.9) as i32,
+            (blob.y + blob.ry * 1.9) as i32,
         );
         let bx0 = bx0.max(0) as u32;
         let by0 = by0.max(0) as u32;
@@ -1273,13 +1286,12 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
                 let dx = (px as f32 - blob.x) / blob.rx;
                 let dy = (py as f32 - blob.y) / blob.ry;
                 let dist_sq = dx * dx + dy * dy;
-                if dist_sq > 2.25 {
+                if dist_sq > 3.61 {
                     continue;
-                } // 1.5^2, beyond visible range
+                } // 1.9^2, beyond visible range
 
-                // Gaussian-ish falloff
-                let falloff = (-dist_sq * 2.0).exp();
-                let alpha = (blob.a * falloff * 255.0) as u16;
+                let falloff = (-dist_sq * 0.9).exp();
+                let alpha = (blob.a * falloff * 255.0).clamp(0.0, 255.0) as u16;
                 if alpha == 0 {
                     continue;
                 }

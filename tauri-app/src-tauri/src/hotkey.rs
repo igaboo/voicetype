@@ -37,7 +37,11 @@ pub enum HotkeyModifier {
 }
 
 /// Double-tap detection window in seconds.
-const DOUBLE_TAP_WINDOW: f64 = 0.35;
+///
+/// This needs to feel forgiving because the first tap briefly enters the
+/// normal hold-to-record path before the second tap is known.
+pub(crate) const DOUBLE_TAP_WINDOW: f64 = 0.6;
+const MAX_TAP_DURATION: f64 = 0.5;
 
 /// Set the callbacks before calling `start()`.
 pub fn set_callbacks(
@@ -152,6 +156,12 @@ mod platform {
     /// Last key-up timestamp for double-tap detection (microseconds since epoch).
     static LAST_KEY_UP: AtomicU64 = AtomicU64::new(0);
 
+    /// Timestamp when the current monitored key press began.
+    static KEY_DOWN_AT: AtomicU64 = AtomicU64::new(0);
+
+    /// Whether the current held key press already fired the double-tap callback.
+    static CURRENT_PRESS_IS_DOUBLE_TAP: AtomicBool = AtomicBool::new(false);
+
     /// The modifier mask we're monitoring (raw u64 flags).
     static MODIFIER_MASK: AtomicU64 = AtomicU64::new(0);
 
@@ -180,6 +190,8 @@ mod platform {
         IS_FN_KEY.store(is_fn, Ordering::SeqCst);
         IS_HELD.store(false, Ordering::SeqCst);
         LAST_KEY_UP.store(0, Ordering::SeqCst);
+        KEY_DOWN_AT.store(0, Ordering::SeqCst);
+        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
 
         // Spawn a dedicated thread with its own CFRunLoop
         std::thread::Builder::new()
@@ -296,6 +308,8 @@ mod platform {
 
             let last_up = LAST_KEY_UP.load(Ordering::SeqCst);
             let now = now_micros();
+            KEY_DOWN_AT.store(now, Ordering::SeqCst);
+            CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
             let elapsed_secs = if last_up > 0 {
                 (now.saturating_sub(last_up)) as f64 / 1_000_000.0
             } else {
@@ -304,6 +318,7 @@ mod platform {
 
             if elapsed_secs < DOUBLE_TAP_WINDOW {
                 LAST_KEY_UP.store(0, Ordering::SeqCst);
+                CURRENT_PRESS_IS_DOUBLE_TAP.store(true, Ordering::SeqCst);
                 if let Ok(cb) = CALLBACKS.lock() {
                     if let Some(ref f) = cb.on_double_tap {
                         f();
@@ -320,7 +335,20 @@ mod platform {
             return std::ptr::null_mut(); // consume event
         } else if !trigger_active && IS_HELD.load(Ordering::SeqCst) {
             IS_HELD.store(false, Ordering::SeqCst);
-            LAST_KEY_UP.store(now_micros(), Ordering::SeqCst);
+            let now = now_micros();
+            let down_at = KEY_DOWN_AT.swap(0, Ordering::SeqCst);
+            let held_secs = if down_at > 0 {
+                (now.saturating_sub(down_at)) as f64 / 1_000_000.0
+            } else {
+                f64::MAX
+            };
+            let was_double_tap = CURRENT_PRESS_IS_DOUBLE_TAP.swap(false, Ordering::SeqCst);
+
+            if !was_double_tap && held_secs <= MAX_TAP_DURATION {
+                LAST_KEY_UP.store(now, Ordering::SeqCst);
+            } else {
+                LAST_KEY_UP.store(0, Ordering::SeqCst);
+            }
 
             if let Ok(cb) = CALLBACKS.lock() {
                 if let Some(ref f) = cb.on_key_up {
@@ -341,6 +369,12 @@ mod platform {
         }
         // The run loop thread will exit on the next iteration
         // since RUNNING is now false.
+    }
+
+    pub fn clear_tap_sequence() {
+        LAST_KEY_UP.store(0, Ordering::SeqCst);
+        KEY_DOWN_AT.store(0, Ordering::SeqCst);
+        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
     }
 }
 
@@ -364,6 +398,12 @@ mod platform {
 
     /// Last key-up timestamp for double-tap detection.
     static LAST_KEY_UP: AtomicU64 = AtomicU64::new(0);
+
+    /// Timestamp when the current monitored key press began.
+    static KEY_DOWN_AT: AtomicU64 = AtomicU64::new(0);
+
+    /// Whether the current held key press already fired the double-tap callback.
+    static CURRENT_PRESS_IS_DOUBLE_TAP: AtomicBool = AtomicBool::new(false);
 
     /// The virtual key code we're monitoring (default: CapsLock = 0x14).
     static TARGET_VK: Mutex<u16> = Mutex::new(0x14);
@@ -394,6 +434,8 @@ mod platform {
         }
         IS_HELD.store(false, Ordering::SeqCst);
         LAST_KEY_UP.store(0, Ordering::SeqCst);
+        KEY_DOWN_AT.store(0, Ordering::SeqCst);
+        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
 
         std::thread::Builder::new()
             .name("yap-hotkey".into())
@@ -463,6 +505,8 @@ mod platform {
 
             let last_up = LAST_KEY_UP.load(Ordering::SeqCst);
             let now = now_micros();
+            KEY_DOWN_AT.store(now, Ordering::SeqCst);
+            CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
             let elapsed_secs = if last_up > 0 {
                 (now.saturating_sub(last_up)) as f64 / 1_000_000.0
             } else {
@@ -471,6 +515,7 @@ mod platform {
 
             if elapsed_secs < DOUBLE_TAP_WINDOW {
                 LAST_KEY_UP.store(0, Ordering::SeqCst);
+                CURRENT_PRESS_IS_DOUBLE_TAP.store(true, Ordering::SeqCst);
                 if let Ok(cb) = CALLBACKS.lock() {
                     if let Some(ref f) = cb.on_double_tap {
                         f();
@@ -487,7 +532,20 @@ mod platform {
             return LRESULT(1); // consume event
         } else if is_key_up && IS_HELD.load(Ordering::SeqCst) {
             IS_HELD.store(false, Ordering::SeqCst);
-            LAST_KEY_UP.store(now_micros(), Ordering::SeqCst);
+            let now = now_micros();
+            let down_at = KEY_DOWN_AT.swap(0, Ordering::SeqCst);
+            let held_secs = if down_at > 0 {
+                (now.saturating_sub(down_at)) as f64 / 1_000_000.0
+            } else {
+                f64::MAX
+            };
+            let was_double_tap = CURRENT_PRESS_IS_DOUBLE_TAP.swap(false, Ordering::SeqCst);
+
+            if !was_double_tap && held_secs <= MAX_TAP_DURATION {
+                LAST_KEY_UP.store(now, Ordering::SeqCst);
+            } else {
+                LAST_KEY_UP.store(0, Ordering::SeqCst);
+            }
 
             if let Ok(cb) = CALLBACKS.lock() {
                 if let Some(ref f) = cb.on_key_up {
@@ -514,6 +572,12 @@ mod platform {
             }
         }
     }
+
+    pub fn clear_tap_sequence() {
+        LAST_KEY_UP.store(0, Ordering::SeqCst);
+        KEY_DOWN_AT.store(0, Ordering::SeqCst);
+        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -528,4 +592,9 @@ pub fn start(modifier: HotkeyModifier) {
 /// Stop listening. Safe to call when already stopped.
 pub fn stop() {
     platform::stop();
+}
+
+/// Clear any pending first-tap candidate.
+pub fn clear_tap_sequence() {
+    platform::clear_tap_sequence();
 }
