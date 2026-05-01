@@ -18,10 +18,10 @@
   const SLIDE_DURATION = 1000; // ms
 
   const blobs = [
-    { color: '147, 51, 234',  offsetX: -8,  offsetY: -3,  size: 220, scale: 1.0  },
-    { color: '59, 130, 246',  offsetX:  5,  offsetY:  2,  size: 260, scale: 0.9  },
-    { color: '34, 211, 238',  offsetX: -4,  offsetY:  4,  size: 190, scale: 0.85 },
-    { color: '99, 102, 241',  offsetX:  7,  offsetY: -2,  size: 240, scale: 0.9  },
+    { color: '147, 51, 234',  offsetX: -5,  offsetY:  2,  size: 170, scale: 1.0  },
+    { color: '59, 130, 246',  offsetX:  3,  offsetY:  6,  size: 195, scale: 0.9  },
+    { color: '34, 211, 238',  offsetX: -3,  offsetY:  8,  size: 150, scale: 0.85 },
+    { color: '99, 102, 241',  offsetX:  4,  offsetY:  3,  size: 180, scale: 0.9  },
   ];
 
   // Celebration phase — smoothly ramps up then back down over 3s
@@ -55,9 +55,9 @@
       const orbitX = Math.cos(angle) * orbitR;
       const orbitY = Math.sin(angle) * orbitR;
 
-      const x = 50 + groupX + b.offsetX + wiggleX + orbitX;
+      const x = 50 + groupX * 0.75 + b.offsetX + wiggleX * 0.75 + orbitX;
       // slideOffset drives the vertical entrance/exit
-      const y = 90 + groupY + b.offsetY + wiggleY + slideOffset + orbitY;
+      const y = 96 + groupY + b.offsetY + wiggleY + slideOffset + orbitY;
 
       const alpha = 0.7 * b.scale;
       return `radial-gradient(ellipse ${b.size}px ${b.size * 0.55}px at ${x}% ${y}%, rgba(${b.color}, ${alpha.toFixed(2)}) 0%, rgba(${b.color}, 0) 70%)`;
@@ -143,8 +143,8 @@
 <style>
   .lava-lamp {
     position: absolute;
-    inset: -40px;
+    inset: -24px;
     pointer-events: none;
-    filter: blur(40px);
+    filter: blur(32px);
   }
 </style>
