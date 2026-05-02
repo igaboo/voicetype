@@ -1154,26 +1154,17 @@ mod platform {
     const MOD_CONTROL: u64 = 1 << 1;
     const MOD_OPTION: u64 = 1 << 2;
     const MOD_SHIFT: u64 = 1 << 3;
-    const WINDOWS_FN_VK: u16 = 0x14; // CapsLock is the Windows stand-in for fn.
-
     /// Install a low-level keyboard hook (WH_KEYBOARD_LL).
     pub fn start(spec: HotkeySpec) {
         if RUNNING.swap(true, Ordering::SeqCst) {
             return;
         }
 
-        let mut target_vks = spec
+        let target_vks = spec
             .triggers
             .iter()
             .filter_map(|trigger| vk_for_trigger(trigger))
             .collect::<Vec<_>>();
-
-        // Windows does not expose most hardware Fn keys to user-space hooks.
-        // Preserve the previous app behavior by treating configured `fn` as
-        // CapsLock in the Windows backend, including for fn+key chains.
-        if spec.modifiers.contains(&HotkeyModifier::Fn) && !target_vks.contains(&WINDOWS_FN_VK) {
-            target_vks.insert(0, WINDOWS_FN_VK);
-        }
 
         if let Ok(mut targets) = TARGET_VKS.lock() {
             *targets = target_vks;
@@ -1591,7 +1582,7 @@ mod platform {
             "escape" => 0x1B,
             "delete" => 0x08,
             "forwarddelete" => 0x2E,
-            "fn" | "capslock" => WINDOWS_FN_VK,
+            "capslock" => 0x14,
             "left" => 0x25,
             "up" => 0x26,
             "right" => 0x27,
@@ -1699,7 +1690,7 @@ mod platform {
             0x1B => "escape",
             0x08 => "delete",
             0x2E => "forwarddelete",
-            WINDOWS_FN_VK => "fn",
+            0x14 => "capslock",
             0x25 => "left",
             0x26 => "up",
             0x27 => "right",

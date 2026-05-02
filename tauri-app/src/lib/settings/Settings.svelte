@@ -386,7 +386,6 @@
     if (e.key === 'Alt' || e.key === 'Option' || e.code === 'AltLeft' || e.code === 'AltRight') return 'option';
     if (e.key === 'Shift' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') return 'shift';
     if (e.key === 'Fn' || e.key === 'fn' || e.key === 'F24') return 'fn';
-    if (isWindowsPlatform() && e.code === 'CapsLock') return 'fn';
     if (e.code.startsWith('Key')) return e.code.slice(3).toLowerCase();
     if (e.code.startsWith('Digit')) return e.code.slice(5);
     if (e.code.startsWith('Numpad') && e.code.length === 7) return e.code.slice(6);
@@ -425,10 +424,6 @@
     if (namedKeys[e.code]) return namedKeys[e.code];
     if (e.key.length === 1) return e.key.toLowerCase();
     return '';
-  }
-
-  function isWindowsPlatform(): boolean {
-    return typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
   }
 
   // ── Hotkey Display ────────────────────────────────────────────────────
