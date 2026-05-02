@@ -80,6 +80,8 @@ const PILL_HIT_PADDING: f32 = 12.0;
 const CONTROL_BUTTON_OFFSET: f32 = 49.0;
 const CONTROL_HIT_RADIUS: f32 = 17.0;
 const GRADIENT_OFFSET_Y: f32 = 18.0;
+const GRADIENT_MOTION_SCALE: f32 = 0.38;
+const GRADIENT_CELEBRATION_RADIUS: f32 = 18.0;
 const GRADIENT_DITHER_ALPHA: f32 = 3.0;
 
 const POSITION_SCALE: [f32; 11] = [
@@ -1332,18 +1334,18 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
     let opacity = anim.gradient_opacity.val().clamp(0.0, 1.0);
     let cy = cy + GRADIENT_OFFSET_Y;
     let t = anim.start_time.elapsed().as_secs_f64();
-    let speed = 0.22 + energy as f64 * 0.18;
-    let brightness = 0.18 + energy * 0.28;
-    let group_x = (t * 0.42 * speed).cos() as f32 * 18.0;
-    let group_y = (t * 0.34 * speed).sin() as f32 * 8.0;
+    let speed = 0.1 + energy as f64 * 0.08;
+    let brightness = 0.12 + energy * 0.2;
+    let group_x = (t * 0.42 * speed).cos() as f32 * 18.0 * GRADIENT_MOTION_SCALE;
+    let group_y = (t * 0.34 * speed).sin() as f32 * 8.0 * GRADIENT_MOTION_SCALE;
 
     // Celebration orbit
     let (ox0, oy0, ox1, oy1, ox2, oy2, ox3, oy3) = if let Some(start) = anim.celebration_start {
         let progress =
             (start.elapsed().as_secs_f64() / CELEBRATION_DURATION.as_secs_f64()).min(1.0);
-        let p = progress * FULL_CIRCLE * 2.0;
-        let envelope = (p / 4.0).sin().max(0.0) as f32;
-        let r = 70.0 * envelope;
+        let p = progress * FULL_CIRCLE;
+        let envelope = (progress * std::f64::consts::PI).sin().max(0.0) as f32;
+        let r = GRADIENT_CELEBRATION_RADIUS * envelope;
         (
             p.cos() as f32 * r,
             p.sin() as f32 * r,
@@ -1374,44 +1376,72 @@ fn render_gradient(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy
 
     let blobs = [
         Blob {
-            x: cx + group_x - 44.0 + (t * 0.58 * speed).sin() as f32 * 13.0 + ox0,
-            y: cy + 24.0 + group_y + (t * 0.43 * speed).cos() as f32 * 7.0 + oy0,
+            x: cx + group_x - 44.0
+                + (t * 0.58 * speed).sin() as f32 * 13.0 * GRADIENT_MOTION_SCALE
+                + ox0,
+            y: cy
+                + 24.0
+                + group_y
+                + (t * 0.43 * speed).cos() as f32 * 7.0 * GRADIENT_MOTION_SCALE
+                + oy0,
             rx: 180.0,
             ry: 92.0,
             r: 147.0 / 255.0,
             g: 51.0 / 255.0,
             b: 234.0 / 255.0,
-            a: brightness * 0.72,
+            a: brightness * 0.5,
         },
         Blob {
-            x: cx + group_x + 38.0 + (t * 0.5 * speed + 1.3).cos() as f32 * 15.0 + ox1,
-            y: cy + 30.0 + group_y + (t * 0.37 * speed + 0.8).sin() as f32 * 9.0 + oy1,
+            x: cx
+                + group_x
+                + 38.0
+                + (t * 0.5 * speed + 1.3).cos() as f32 * 15.0 * GRADIENT_MOTION_SCALE
+                + ox1,
+            y: cy
+                + 30.0
+                + group_y
+                + (t * 0.37 * speed + 0.8).sin() as f32 * 9.0 * GRADIENT_MOTION_SCALE
+                + oy1,
             rx: 210.0,
             ry: 104.0,
             r: 59.0 / 255.0,
             g: 130.0 / 255.0,
             b: 246.0 / 255.0,
-            a: brightness * 0.68,
+            a: brightness * 0.5,
         },
         Blob {
-            x: cx + group_x - 16.0 + (t * 0.46 * speed + 2.6).sin() as f32 * 12.0 + ox2,
-            y: cy + 38.0 + group_y + (t * 0.41 * speed + 1.9).cos() as f32 * 8.0 + oy2,
+            x: cx + group_x - 16.0
+                + (t * 0.46 * speed + 2.6).sin() as f32 * 12.0 * GRADIENT_MOTION_SCALE
+                + ox2,
+            y: cy
+                + 38.0
+                + group_y
+                + (t * 0.41 * speed + 1.9).cos() as f32 * 8.0 * GRADIENT_MOTION_SCALE
+                + oy2,
             rx: 168.0,
             ry: 84.0,
             r: 34.0 / 255.0,
             g: 211.0 / 255.0,
             b: 238.0 / 255.0,
-            a: brightness * 0.56,
+            a: brightness * 0.42,
         },
         Blob {
-            x: cx + group_x + 10.0 + (t * 0.39 * speed + 4.1).cos() as f32 * 14.0 + ox3,
-            y: cy + 20.0 + group_y + (t * 0.52 * speed + 3.4).sin() as f32 * 7.0 + oy3,
+            x: cx
+                + group_x
+                + 10.0
+                + (t * 0.39 * speed + 4.1).cos() as f32 * 14.0 * GRADIENT_MOTION_SCALE
+                + ox3,
+            y: cy
+                + 20.0
+                + group_y
+                + (t * 0.52 * speed + 3.4).sin() as f32 * 7.0 * GRADIENT_MOTION_SCALE
+                + oy3,
             rx: 194.0,
             ry: 94.0,
             r: 99.0 / 255.0,
             g: 102.0 / 255.0,
             b: 241.0 / 255.0,
-            a: brightness * 0.64,
+            a: brightness * 0.46,
         },
     ];
 
