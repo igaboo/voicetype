@@ -186,7 +186,7 @@ impl Spring {
 #[derive(Clone)]
 pub struct OverlayState {
     // Core state
-    pub mode: String, // "idle" | "recording" | "processing" | "noSpeech" | "error"
+    pub mode: String, // "idle" | "pending" | "recording" | "processing" | "noSpeech" | "error"
     pub bars: [f32; 11],
     pub level: f32,
     pub hands_free: bool,
@@ -238,6 +238,7 @@ impl Default for OverlayState {
 
 struct AnimState {
     bar_springs: [Spring; 11],
+    bar_opacity_springs: [Spring; 11],
     pill_scale: Spring,           // 0.5 (minimized) → 1.0 (expanded)
     pill_opacity: Spring,         // For fade in/out
     gradient_energy: Spring,      // 0.0–1.0
@@ -263,6 +264,7 @@ impl AnimState {
     fn new() -> Self {
         Self {
             bar_springs: std::array::from_fn(|_| Spring::new(BAR_MIN_H, 280.0, 18.0)),
+            bar_opacity_springs: std::array::from_fn(|_| Spring::new(0.25, 180.0, 24.0)),
             pill_scale: Spring::new(0.5, 180.0, 22.0),
             pill_opacity: Spring::new(1.0, 200.0, 20.0),
             gradient_energy: Spring::new(0.0, 120.0, 18.0),
@@ -375,6 +377,7 @@ impl AnimState {
 
         // -- Gradient energy --
         let energy = match state.mode.as_str() {
+            "pending" => 0.0,
             "recording" => 1.0,
             "processing" => 0.6,
             _ => {
@@ -387,8 +390,9 @@ impl AnimState {
                 }
             }
         };
-        let show_gradient =
-            (is_expanded || (state.hovering && is_minimized)) && state.gradient_enabled;
+        let show_gradient = state.mode != "pending"
+            && (is_expanded || (state.hovering && is_minimized))
+            && state.gradient_enabled;
         self.gradient_energy
             .set_target(if show_gradient { energy } else { 0.0 });
         self.gradient_opacity
@@ -428,8 +432,21 @@ impl AnimState {
                 BAR_MIN_H // flat bars for idle, paused, noSpeech
             };
 
+            let target_opacity = if is_processing {
+                let wave_center = -5.0 + wave_t as f32 * 20.0;
+                let dist = (i as f32 - wave_center).abs();
+                let wave = (-dist * dist / 6.0).exp();
+                0.35 + 0.6 * wave
+            } else if state.mode == "recording" && !state.paused {
+                0.9
+            } else {
+                0.25
+            };
+
             self.bar_springs[i].set_target(target_h);
             self.bar_springs[i].tick(dt);
+            self.bar_opacity_springs[i].set_target(target_opacity);
+            self.bar_opacity_springs[i].tick(dt);
         }
 
         // -- Error auto-dismiss --
@@ -1292,6 +1309,16 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                 );
             }
         }
+        "pending" => {
+            render_bars(
+                &mut pixmap,
+                anim,
+                &state,
+                pill_content_cx,
+                pill_cy,
+                pill_scale,
+            );
+        }
         "error" => {
             render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale);
         }
@@ -1533,23 +1560,12 @@ fn render_bars(
     let bar_gap = BAR_GAP * scale;
     let bars_total_w = BARS_TOTAL_W * scale;
     let start_x = cx - bars_total_w / 2.0;
-    let is_processing = state.mode == "processing";
-    let t = anim.start_time.elapsed().as_secs_f64();
 
     for i in 0..BAR_COUNT {
         let bar_h = anim.bar_springs[i].val() * scale;
         let x = start_x + i as f32 * (bar_w + bar_gap);
         let y = cy - bar_h / 2.0;
-
-        let opacity = if is_processing {
-            let wave_t = (t % 1.2) / 1.2;
-            let wave_center = -5.0 + wave_t as f32 * 20.0;
-            let dist = (i as f32 - wave_center).abs();
-            let wave = (-dist * dist / 6.0).exp();
-            0.35 + 0.6 * wave
-        } else {
-            0.9
-        };
+        let opacity = anim.bar_opacity_springs[i].val();
 
         let bar_path = rounded_rect(x, y, bar_w, bar_h, 1.5 * scale);
         let mut paint = tiny_skia::Paint::default();
@@ -1920,10 +1936,7 @@ fn render_keycap(
 
 fn onboarding_card_text(step: &OnboardingStep, hotkey_label: &str) -> String {
     match step {
-        OnboardingStep::TryIt => format!(
-            "Hold {} and speak \u{2014} Yap transcribes it",
-            hotkey_label
-        ),
+        OnboardingStep::TryIt => format!("Hold {} to start recording", hotkey_label),
         OnboardingStep::Nice => {
             let msgs = [
                 "Nice!",
@@ -1936,9 +1949,9 @@ fn onboarding_card_text(step: &OnboardingStep, hotkey_label: &str) -> String {
             msgs[rand::random::<u32>() as usize % msgs.len()].to_string()
         }
         OnboardingStep::DoubleTapTip => {
-            format!("Double-tap {} for hands-free transcription", hotkey_label)
+            format!("Double-tap {} for hands-free recording", hotkey_label)
         }
-        OnboardingStep::ClickTip => "Click the pill for hands-free transcription".to_string(),
+        OnboardingStep::ClickTip => "Click the pill for hands-free recording".to_string(),
         OnboardingStep::ApiTip => {
             "Add an API key in the menu bar for better transcription".to_string()
         }

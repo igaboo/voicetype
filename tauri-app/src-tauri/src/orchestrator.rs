@@ -29,7 +29,7 @@ const SHORT_TAP_TIP_GRACE: Duration =
 const HOLD_TO_RECORD_DELAY: Duration = Duration::from_millis(250);
 const SOUND_START_PRESS: &str = "Blow";
 const SOUND_HANDS_FREE: &str = "HandsFree";
-const SOUND_ERROR: &str = "Error";
+const SOUND_NEXT: &str = "Pop";
 const SOUND_SKIP: &str = "Skip";
 
 // ---------------------------------------------------------------------------
@@ -156,7 +156,7 @@ static NICE_MESSAGES: &[&str] = &[
 fn onboarding_text(step: &OnboardingStep, hotkey_label: &str) -> String {
     match step {
         OnboardingStep::TryIt => format!(
-            "Hold <span class=\"keycap\">{}</span> and speak — Yap transcribes it",
+            "Hold <span class=\"keycap\">{}</span> to start recording",
             hotkey_label
         ),
         OnboardingStep::Nice => {
@@ -167,10 +167,10 @@ fn onboarding_text(step: &OnboardingStep, hotkey_label: &str) -> String {
                 .to_string()
         }
         OnboardingStep::DoubleTapTip => format!(
-            "Double-tap <span class=\"keycap\">{}</span> for hands-free transcription",
+            "Double-tap <span class=\"keycap\">{}</span> for hands-free recording",
             hotkey_label
         ),
-        OnboardingStep::ClickTip => "Click the pill for hands-free transcription".to_string(),
+        OnboardingStep::ClickTip => "Click the pill for hands-free recording".to_string(),
         OnboardingStep::ApiTip => {
             "Add an API key in the menu bar for better transcription".to_string()
         }
@@ -321,9 +321,9 @@ impl OrchestratorInner {
         // Map internal state to simplified frontend state string
         let state_str = match self.state {
             AppState::Idle => "idle",
-            AppState::PressPending => "recording",
+            AppState::PressPending => "pending",
             AppState::Recording => "recording",
-            AppState::TapPending => "recording",
+            AppState::TapPending => "pending",
             AppState::HandsFreeRecording => "recording",
             AppState::HandsFreePaused => "recording",
             AppState::Processing => "processing",
@@ -350,6 +350,12 @@ impl OrchestratorInner {
         };
 
         self.emit_overlay_state(state_str, hands_free, paused, elapsed);
+        if matches!(
+            self.state,
+            AppState::Idle | AppState::PressPending | AppState::TapPending
+        ) {
+            emit_levels_to_renderers(&self.app, &AudioLevels::default());
+        }
         tray::update_icon(&self.app, state_str);
     }
 
@@ -544,7 +550,7 @@ impl Orchestrator {
                                 );
                                 #[cfg(target_os = "windows")]
                                 crate::win_overlay::update_state(|st| st.is_pressed = false);
-                                play_sound(&inner.app, SOUND_ERROR);
+                                play_sound(&inner.app, SOUND_NEXT);
                                 drop(inner);
                                 // Small delay then advance
                                 std::thread::sleep(std::time::Duration::from_millis(400));
@@ -570,6 +576,10 @@ impl Orchestrator {
         match start_configured_recording() {
             Ok(_path) => {
                 log::info("Recording started");
+                self.complete_onboarding_recording_action(
+                    OnboardingStep::TryIt,
+                    OnboardingStep::DoubleTapTip,
+                );
             }
             Err(e) => {
                 log::info(&format!("Failed to start recording: {e}"));
@@ -721,6 +731,10 @@ impl Orchestrator {
                         drop(inner);
                         play_sound(&app, SOUND_HANDS_FREE);
                         log::info("Hands-free recording started");
+                        self.complete_onboarding_recording_action(
+                            OnboardingStep::DoubleTapTip,
+                            OnboardingStep::ClickTip,
+                        );
                     }
                     Err(e) => {
                         log::info(&format!("Failed to start recording: {e}"));
@@ -819,6 +833,10 @@ impl Orchestrator {
                         drop(inner);
                         play_sound(&app, SOUND_HANDS_FREE);
                         log::info("Pill click: hands-free recording started");
+                        self.complete_onboarding_recording_action(
+                            OnboardingStep::ClickTip,
+                            OnboardingStep::ApiTip,
+                        );
                     }
                     Err(e) => {
                         log::info(&format!("Pill click: failed to start recording: {e}"));
@@ -932,6 +950,12 @@ impl Orchestrator {
     /// Called from the audio level polling loop with fresh levels.
     pub fn on_audio_levels(&self, levels: AudioLevels) {
         let mut inner = self.inner.lock().unwrap();
+        if !matches!(
+            inner.state,
+            AppState::Recording | AppState::HandsFreeRecording
+        ) {
+            return;
+        }
         if levels.level > inner.peak_level {
             inner.peak_level = levels.level;
         }
@@ -1014,43 +1038,42 @@ impl Orchestrator {
         }
     }
 
-    /// After a successful transcription+paste during onboarding, show the
+    /// After the requested onboarding recording action starts, show the
     /// "nice" celebration and then advance to the next step.
-    fn on_successful_paste_onboarding(&self) {
+    fn complete_onboarding_recording_action(
+        &self,
+        expected_step: OnboardingStep,
+        next_step: OnboardingStep,
+    ) {
         let mut inner = self.inner.lock().unwrap();
         if inner.onboarding_complete {
             return;
         }
 
-        let next_step = match inner.onboarding_step.as_ref() {
-            Some(OnboardingStep::TryIt) => Some(OnboardingStep::DoubleTapTip),
-            Some(OnboardingStep::DoubleTapTip) => Some(OnboardingStep::ClickTip),
-            Some(OnboardingStep::ClickTip) => Some(OnboardingStep::ApiTip),
-            _ => None,
-        };
-
-        if let Some(next) = next_step {
-            inner.nice_context = Some(NiceContext { next_step: next });
-            inner.onboarding_step = Some(OnboardingStep::Nice);
-            inner.emit_onboarding();
-
-            let app = inner.app.clone();
-            drop(inner);
-
-            // After 1.5s, advance from nice to the next step
-            let orch = app.state::<Arc<Orchestrator>>();
-            let orch = Arc::clone(&orch);
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1500));
-                let mut inner = orch.inner.lock().unwrap();
-                if inner.onboarding_step == Some(OnboardingStep::Nice) {
-                    if let Some(ctx) = inner.nice_context.take() {
-                        inner.onboarding_step = Some(ctx.next_step);
-                        inner.emit_onboarding();
-                    }
-                }
-            });
+        if inner.onboarding_step.as_ref() != Some(&expected_step) {
+            return;
         }
+
+        inner.nice_context = Some(NiceContext { next_step });
+        inner.onboarding_step = Some(OnboardingStep::Nice);
+        inner.emit_onboarding();
+
+        let app = inner.app.clone();
+        drop(inner);
+
+        // After 1.5s, advance from nice to the next step.
+        let orch = app.state::<Arc<Orchestrator>>();
+        let orch = Arc::clone(&orch);
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(1500));
+            let mut inner = orch.inner.lock().unwrap();
+            if inner.onboarding_step == Some(OnboardingStep::Nice) {
+                if let Some(ctx) = inner.nice_context.take() {
+                    inner.onboarding_step = Some(ctx.next_step);
+                    inner.emit_onboarding();
+                }
+            }
+        });
     }
 
     /// Restore onboarding card after an error auto-dismisses or processing finishes.
@@ -1185,9 +1208,6 @@ impl Orchestrator {
                         inner.state = AppState::Idle;
                         inner.emit_state();
                     }
-
-                    // Trigger onboarding celebration + advancement if applicable
-                    orch.on_successful_paste_onboarding();
                 }
                 Err(e) => {
                     log::info(&format!("Pipeline error: {e}"));

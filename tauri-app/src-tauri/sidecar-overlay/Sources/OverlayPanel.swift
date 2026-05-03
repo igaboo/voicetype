@@ -139,6 +139,21 @@ class OverlayPanel: NSPanel {
         let wasIdle = overlayState.mode == .idle
 
         switch state {
+        case "pending":
+            overlayState.audioLevel = 0
+            overlayState.bandLevels = Array(repeating: 0, count: 11)
+            overlayState.isHandsFree = false
+            overlayState.isPaused = false
+            overlayState.handsFreeElapsed = elapsed
+            if wasIdle {
+                alphaValue = 1
+                if !overlayState.alwaysVisible { slideIn() } else { showAtRest() }
+            }
+            withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
+                overlayState.mode = .pending
+            }
+            updateButtonTargets()
+
         case "recording":
             if wasIdle {
                 overlayState.audioLevel = 0
@@ -161,6 +176,8 @@ class OverlayPanel: NSPanel {
         case "idle":
             overlayState.isHandsFree = false
             overlayState.isPaused = false
+            overlayState.audioLevel = 0
+            overlayState.bandLevels = Array(repeating: 0, count: 11)
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
                 overlayState.mode = .idle
             }
@@ -296,7 +313,7 @@ class OverlayPanel: NSPanel {
 // MARK: - State
 
 enum OverlayMode: Equatable {
-    case idle, recording, processing, noSpeech, error(String)
+    case idle, pending, recording, processing, noSpeech, error(String)
 }
 
 enum OnboardingStep: Hashable {
@@ -369,6 +386,7 @@ struct OverlayView: View {
 
     private var gradientEnergy: CGFloat {
         switch state.mode {
+        case .pending: return 0.0
         case .recording: return 1.0
         case .processing: return 0.6
         default:
@@ -377,7 +395,9 @@ struct OverlayView: View {
         }
     }
 
-    private var showGradient: Bool { (isExpanded || state.isHovering) && state.gradientEnabled }
+    private var showGradient: Bool {
+        state.mode != .pending && (isExpanded || state.isHovering) && state.gradientEnabled
+    }
     private var stackYOffset: CGFloat {
         isExpanded ? OverlayLayout.expandedStackYOffset : OverlayLayout.minimizedStackYOffset
     }
@@ -529,9 +549,13 @@ struct OverlayView: View {
                 .transition(.opacity)
         } else {
             switch state.mode {
-            case .recording, .processing:
+            case .pending, .recording, .processing:
                 ZStack {
-                    BarVisualizer(bandLevels: state.bandLevels, isProcessing: state.mode == .processing)
+                    BarVisualizer(
+                        bandLevels: state.mode == .pending ? Array(repeating: 0, count: 11) : state.bandLevels,
+                        isProcessing: state.mode == .processing,
+                        isActive: state.mode != .pending
+                    )
                         .frame(width: 52, height: 28)
                         .opacity(state.isHandsFree && state.isPaused ? 0 : 1)
 
@@ -562,7 +586,6 @@ struct OverlayView: View {
                         .opacity(state.isHandsFree ? 1 : 0)
                 }
                 .frame(width: state.isHandsFree ? 124 : 52, height: 28)
-                .transition(.opacity)
 
             case .noSpeech:
                 flatBars.transition(.opacity)
@@ -725,13 +748,13 @@ struct PromptCardView: View {
     private var cardContent: some View {
         switch step {
         case .tryIt:
-            HStack(spacing: 6) { Text("Hold"); KeyCapView(label: hotkeyLabel); Text("and speak — Yap transcribes it") }
+            HStack(spacing: 6) { Text("Hold"); KeyCapView(label: hotkeyLabel); Text("to start recording") }
         case .nice:
             Text(PromptCardView.niceMessages.randomElement()!)
         case .doubleTapTip:
-            HStack(spacing: 6) { Text("Double-tap"); KeyCapView(label: hotkeyLabel); Text("for hands-free transcription") }
+            HStack(spacing: 6) { Text("Double-tap"); KeyCapView(label: hotkeyLabel); Text("for hands-free recording") }
         case .clickTip:
-            Text("Click the pill for hands-free transcription")
+            Text("Click the pill for hands-free recording")
         case .apiTip:
             Text("Add an API key in the menu bar for better transcription")
         case .formattingTip:
@@ -747,11 +770,11 @@ struct PromptCardView: View {
 struct BarVisualizer: View {
     var bandLevels: [Float]
     var isProcessing: Bool
+    var isActive: Bool = true
     let barCount = 11
 
     private let positionScale: [CGFloat] = [0.35, 0.45, 0.6, 0.78, 0.92, 1.0, 0.94, 0.8, 0.63, 0.48, 0.38]
 
-    @State private var appeared = false
     @State private var waveStrength: CGFloat = 0
     @State private var audioDecay: CGFloat = 1
     @State private var waveStart: Date? = nil
@@ -780,26 +803,21 @@ struct BarVisualizer: View {
                     let distance = abs(Double(index) - waveCenter)
                     let wave = exp(-distance * distance / 6.0)
                     let waveH = 14.0 * CGFloat(wave) * waveStrength
-                    let barHeight = min(28.0, max(minH, audioH + waveH))
+                    let barHeight = isActive ? min(28.0, max(minH, audioH + waveH)) : minH
                     let dimOpacity = 0.35
                     let brightOpacity = 0.95
                     let shimmer = dimOpacity + (brightOpacity - dimOpacity) * Double(wave) * Double(waveStrength)
-                    let barOpacity = isProcessing ? shimmer : 0.9
+                    let barOpacity = isActive ? (isProcessing ? shimmer : 0.9) : 0.25
 
                     RoundedRectangle(cornerRadius: 1.5)
                         .fill(Color.white.opacity(barOpacity))
                         .frame(width: 3, height: barHeight)
                         .animation(.interpolatingSpring(stiffness: 280, damping: 18), value: bandLevel)
+                        .animation(.easeOut(duration: 0.18), value: isActive)
                 }
             }
         }
         .frame(height: 28)
-        .scaleEffect(x: appeared ? 1 : 0.001, y: 1, anchor: .center)
-        .opacity(appeared ? 1 : 0)
-        .animation(.spring(response: 0.3, dampingFraction: 0.75), value: appeared)
-        .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { appeared = true }
-        }
         .onChange(of: isProcessing) { processing in
             if processing {
                 waveStart = Date()
