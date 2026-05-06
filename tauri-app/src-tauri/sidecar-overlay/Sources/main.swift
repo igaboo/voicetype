@@ -13,8 +13,8 @@ panel.overlayState.onPermissionAction = { sendEvent("permission_action") }
 panel.overlayState.onPauseResume = { sendEvent("pause") }
 panel.overlayState.onStop = { sendEvent("stop") }
 
-// Show the panel (starts hidden or visible based on default alwaysVisible=true)
-panel.orderFront(nil)
+// Show the panel through OverlayPanel so its frame and click targets stay in sync.
+panel.showAtRest()
 
 // -- stdin reader (background thread) --
 let decoder = JSONDecoder()

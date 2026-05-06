@@ -1,43 +1,78 @@
 import Cocoa
 import SwiftUI
 
-// MARK: - Hit-testing
+// MARK: - Hit targets
 
-/// NSView subclass that receives first-click and forwards to a callback.
-class ClickTargetView: NSView {
-    var onClick: (() -> Void)?
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-    override func mouseDown(with event: NSEvent) { onClick?() }
-}
+/// Small transparent child panel for the few regions that should remain clickable.
+final class OverlayHitPanel: NSPanel {
+    final class HitView: NSView {
+        var onClick: ((NSPoint) -> Void)?
+        var onHover: ((Bool) -> Void)?
+        private var trackingAreaRef: NSTrackingArea?
 
-/// Content view that passes clicks through except on explicit overlay targets.
-class OverlayContentView: NSView {
-    var pillHitRegion: NSRect = .zero
-    var permissionHitRegion: NSRect = .zero
-    var onPermissionClick: (() -> Void)?
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
-    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-    override func hitTest(_ point: NSPoint) -> NSView? {
-        if permissionHitRegion.contains(point) {
-            return self
+        override func updateTrackingAreas() {
+            if let trackingAreaRef {
+                removeTrackingArea(trackingAreaRef)
+            }
+            trackingAreaRef = NSTrackingArea(
+                rect: bounds,
+                options: [.activeAlways, .mouseEnteredAndExited, .inVisibleRect],
+                owner: self,
+                userInfo: nil
+            )
+            addTrackingArea(trackingAreaRef!)
+            super.updateTrackingAreas()
         }
-        for subview in subviews.reversed() {
-            guard subview is ClickTargetView else { continue }
-            let local = convert(point, to: subview)
-            if subview.bounds.contains(local) { return subview }
+
+        override func mouseEntered(with event: NSEvent) { onHover?(true) }
+        override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+        override func mouseDown(with event: NSEvent) {
+            onClick?(convert(event.locationInWindow, from: nil))
         }
-        if pillHitRegion.contains(point) {
-            return super.hitTest(point)
-        }
-        return nil
     }
 
-    override func mouseDown(with event: NSEvent) {
-        let point = convert(event.locationInWindow, from: nil)
-        if permissionHitRegion.contains(point) {
-            onPermissionClick?()
+    let hitView = HitView(frame: NSRect(x: 0, y: 0, width: 1, height: 1))
+
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    init() {
+        super.init(
+            contentRect: NSRect(x: 0, y: 0, width: 1, height: 1),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        level = .floating
+        isOpaque = false
+        backgroundColor = .clear
+        hasShadow = false
+        ignoresMouseEvents = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        hidesOnDeactivate = false
+        hitView.wantsLayer = true
+        hitView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.01).cgColor
+        contentView = hitView
+    }
+
+    func apply(parent: NSWindow, region: NSRect) {
+        guard !region.isEmpty, parent.isVisible else {
+            orderOut(nil)
+            return
         }
+
+        let frame = NSRect(
+            x: parent.frame.minX + region.minX,
+            y: parent.frame.minY + region.minY,
+            width: region.width,
+            height: region.height
+        )
+        setFrame(frame, display: true)
+        hitView.frame = NSRect(origin: .zero, size: frame.size)
+        orderFrontRegardless()
     }
 }
 
@@ -46,9 +81,14 @@ class OverlayContentView: NSView {
 class OverlayPanel: NSPanel {
     let overlayState = OverlayState()
     private var errorDismissWork: DispatchWorkItem?
-    private var pauseTarget: ClickTargetView?
-    private var stopTarget: ClickTargetView?
-    private var contentOverlay: OverlayContentView?
+    private let pillHitPanel = OverlayHitPanel()
+    private let permissionHitPanel = OverlayHitPanel()
+    private let pauseHitPanel = OverlayHitPanel()
+    private let stopHitPanel = OverlayHitPanel()
+    private var pillHitRegion: NSRect = .zero
+    private var permissionHitRegion: NSRect = .zero
+    private var pauseHitRegion: NSRect = .zero
+    private var stopHitRegion: NSRect = .zero
 
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
@@ -72,34 +112,33 @@ class OverlayPanel: NSPanel {
         isOpaque = false
         backgroundColor = .clear
         hasShadow = false
-        ignoresMouseEvents = false
+        ignoresMouseEvents = true
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         isMovableByWindowBackground = false
         hidesOnDeactivate = false
-
-        let container = OverlayContentView(frame: NSRect(x: 0, y: 0, width: width, height: height))
-        container.onPermissionClick = { [weak self] in self?.overlayState.onPermissionAction?() }
-        contentOverlay = container
 
         let hostingView = NSHostingView(rootView:
             OverlayView(state: overlayState)
                 .frame(width: width, height: height)
         )
         hostingView.frame = NSRect(x: 0, y: 0, width: width, height: height)
-        container.addSubview(hostingView)
+        contentView = hostingView
 
-        let pause = ClickTargetView(frame: .zero)
-        pause.onClick = { [weak self] in self?.overlayState.onPauseResume?() }
-        container.addSubview(pause)
-        pauseTarget = pause
+        pillHitPanel.hitView.onClick = { [weak self] point in self?.handlePillHit(point) }
+        pillHitPanel.hitView.onHover = { [weak self] hovering in self?.handlePillHover(hovering) }
+        permissionHitPanel.hitView.onClick = { [weak self] _ in self?.overlayState.onPermissionAction?() }
+        pauseHitPanel.hitView.onClick = { [weak self] _ in self?.overlayState.onPauseResume?() }
+        stopHitPanel.hitView.onClick = { [weak self] _ in self?.overlayState.onStop?() }
 
-        let stop = ClickTargetView(frame: .zero)
-        stop.onClick = { [weak self] in self?.overlayState.onStop?() }
-        container.addSubview(stop)
-        stopTarget = stop
-
-        contentView = container
+        updateButtonTargets()
         updatePillTarget()
+    }
+
+    deinit {
+        pillHitPanel.orderOut(nil)
+        permissionHitPanel.orderOut(nil)
+        pauseHitPanel.orderOut(nil)
+        stopHitPanel.orderOut(nil)
     }
 
     private var onScreenFrame: NSRect {
@@ -122,18 +161,22 @@ class OverlayPanel: NSPanel {
         )
     }
 
-    private func showAtRest() {
+    func showAtRest() {
         setFrame(onScreenFrame, display: true)
         orderFront(nil)
+        updateHitPanels()
     }
 
     private func slideIn() {
         orderFront(nil)
+        updateHitPanels()
         let target = onScreenFrame
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.5
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1)
             animator().setFrame(target, display: true)
+        } completionHandler: { [weak self] in
+            self?.updateHitPanels()
         }
     }
 
@@ -143,6 +186,8 @@ class OverlayPanel: NSPanel {
             ctx.duration = 0.4
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0, 1, 1)
             animator().setFrame(target, display: true)
+        } completionHandler: { [weak self] in
+            self?.updateHitPanels()
         }
     }
 
@@ -168,7 +213,6 @@ class OverlayPanel: NSPanel {
             withAnimation(.timingCurve(0.16, 1, 0.3, 1, duration: 0.35)) {
                 overlayState.mode = .pending
             }
-            updateButtonTargets()
 
         case "recording":
             if wasIdle {
@@ -182,7 +226,6 @@ class OverlayPanel: NSPanel {
             overlayState.isHandsFree = handsFree
             overlayState.isPaused = paused
             overlayState.handsFreeElapsed = elapsed
-            updateButtonTargets()
 
         case "processing":
             overlayState.isHandsFree = false
@@ -210,6 +253,7 @@ class OverlayPanel: NSPanel {
         default:
             break
         }
+        updateButtonTargets()
         updatePillTarget()
     }
 
@@ -221,6 +265,7 @@ class OverlayPanel: NSPanel {
 
     func applyError(_ message: String) {
         overlayState.mode = .error(message)
+        updateButtonTargets()
         updatePillTarget()
         errorDismissWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -244,6 +289,7 @@ class OverlayPanel: NSPanel {
                 slideOut()
             }
         }
+        updateButtonTargets()
         updatePillTarget()
     }
 
@@ -280,9 +326,11 @@ class OverlayPanel: NSPanel {
         if let label = hotkeyLabel { overlayState.hotkeyLabel = label }
         if let visible = alwaysVisible {
             overlayState.alwaysVisible = visible
-            guard overlayState.mode == .idle && overlayState.onboardingStep == nil else { return }
-            if visible { showAtRest() } else { slideOut() }
+            if overlayState.mode == .idle && overlayState.onboardingStep == nil {
+                if visible { showAtRest() } else { slideOut() }
+            }
         }
+        updatePillTarget()
     }
 
     func applyCelebrating() {
@@ -291,13 +339,50 @@ class OverlayPanel: NSPanel {
 
     // MARK: - Private
 
+    private var isMinimizedIdle: Bool {
+        overlayState.mode == .idle
+            && overlayState.permissionPrompt == nil
+            && overlayState.onboardingStep == nil
+    }
+
+    private func updateHitPanels() {
+        pillHitPanel.apply(parent: self, region: pillHitRegion)
+        permissionHitPanel.apply(parent: self, region: permissionHitRegion)
+        pauseHitPanel.apply(parent: self, region: pauseHitRegion)
+        stopHitPanel.apply(parent: self, region: stopHitRegion)
+
+        if !isMinimizedIdle, overlayState.isHovering {
+            overlayState.isHovering = false
+        }
+    }
+
+    private func handlePillHover(_ hovering: Bool) {
+        let shouldHover = hovering && isMinimizedIdle
+        if overlayState.isHovering != shouldHover {
+            withAnimation(.easeOut(duration: 0.35)) {
+                overlayState.isHovering = shouldHover
+            }
+        }
+    }
+
+    private func handlePillHit(_: NSPoint) {
+        guard overlayState.mode != .processing else { return }
+        overlayState.onClickToRecord?()
+    }
+
     private func updateButtonTargets() {
-        guard let pause = pauseTarget, let stop = stopTarget else { return }
+        guard overlayState.mode == .recording && overlayState.isHandsFree else {
+            pauseHitRegion = .zero
+            stopHitRegion = .zero
+            updateHitPanels()
+            return
+        }
+
         let cx = frame.width / 2
         let cy = OverlayLayout.controlCenterY - OverlayLayout.expandedStackYOffset
 
         let scale: CGFloat
-        if overlayState.mode == .recording && !overlayState.isPaused {
+        if !overlayState.isPaused {
             let lvl = min(CGFloat(overlayState.audioLevel), 1.0)
             scale = OverlayLayout.controlScale * (1.0 + pow(lvl, 1.5) * OverlayLayout.audioBounceScale)
         } else {
@@ -308,47 +393,96 @@ class OverlayPanel: NSPanel {
         let pauseCX = cx - OverlayLayout.controlButtonSpacing * scale
         let stopCX  = cx + OverlayLayout.controlButtonSpacing * scale
 
-        pause.frame = NSRect(x: pauseCX - targetRadius, y: cy - targetRadius,
-                             width: targetRadius * 2, height: targetRadius * 2)
-        stop.frame  = NSRect(x: stopCX - targetRadius, y: cy - targetRadius,
-                             width: targetRadius * 2, height: targetRadius * 2)
+        pauseHitRegion = NSRect(x: pauseCX - targetRadius, y: cy - targetRadius,
+                                 width: targetRadius * 2, height: targetRadius * 2)
+        stopHitRegion = NSRect(x: stopCX - targetRadius, y: cy - targetRadius,
+                                width: targetRadius * 2, height: targetRadius * 2)
+        updateHitPanels()
     }
 
     private func updatePillTarget() {
         let cx = frame.width / 2
         let isExpanded = overlayState.mode != .idle || overlayState.onboardingStep != nil || overlayState.permissionPrompt != nil
         if overlayState.permissionPrompt != nil {
-            contentOverlay?.permissionHitRegion = NSRect(
+            permissionHitRegion = NSRect(
                 x: cx - OverlayLayout.permissionCardHitWidth / 2,
                 y: OverlayLayout.permissionCardHitY,
                 width: OverlayLayout.permissionCardHitWidth,
                 height: OverlayLayout.permissionCardHitHeight
             )
         } else {
-            contentOverlay?.permissionHitRegion = .zero
+            permissionHitRegion = .zero
         }
         switch overlayState.mode {
         case .processing:
-            contentOverlay?.pillHitRegion = .zero
+            pillHitRegion = .zero
         default:
-            if isExpanded {
-                let width = OverlayLayout.activePillHitWidth
-                let y = OverlayLayout.activePillHitBaseY - OverlayLayout.expandedStackYOffset
-                contentOverlay?.pillHitRegion = NSRect(
-                    x: cx - width / 2,
-                    y: y,
-                    width: width,
-                    height: OverlayLayout.activePillHitHeight
-                )
+            if overlayState.mode == .recording && overlayState.isHandsFree {
+                pillHitRegion = .zero
             } else {
-                let width = OverlayLayout.idlePillHitWidth
-                contentOverlay?.pillHitRegion = NSRect(
-                    x: cx - width / 2,
-                    y: OverlayLayout.idlePillHitY,
-                    width: width,
-                    height: OverlayLayout.idlePillHitHeight
+                let size = pillHitSize(isExpanded: isExpanded)
+                let centerY = isExpanded ? OverlayLayout.activePillCenterY : OverlayLayout.idlePillCenterY
+                pillHitRegion = NSRect(
+                    x: cx - size.width / 2,
+                    y: centerY - size.height / 2,
+                    width: size.width,
+                    height: size.height
                 )
             }
+        }
+        updateHitPanels()
+    }
+
+    private func pillHitSize(isExpanded: Bool) -> NSSize {
+        let contentWidth: CGFloat
+        let contentHeight: CGFloat
+        let horizontalPadding: CGFloat
+        let scale: CGFloat
+
+        if isExpanded {
+            contentWidth = expandedPillContentWidth()
+            contentHeight = OverlayLayout.pillExpandedContentHeight
+            horizontalPadding = overlayState.isHandsFree
+                ? OverlayLayout.pillHandsFreeHorizontalPadding
+                : OverlayLayout.pillHorizontalPadding
+            scale = OverlayLayout.pillExpandedScale
+        } else {
+            contentWidth = OverlayLayout.pillIdleContentWidth
+            contentHeight = OverlayLayout.pillIdleContentHeight
+            horizontalPadding = OverlayLayout.pillHorizontalPadding
+            scale = overlayState.isHovering ? OverlayLayout.pillHoverScale : OverlayLayout.pillIdleScale
+        }
+
+        let width = (contentWidth + horizontalPadding * 2) * scale + OverlayLayout.pillHitPadding * 2
+        let height = (contentHeight + OverlayLayout.pillVerticalPadding * 2) * scale + OverlayLayout.pillHitPadding * 2
+        return NSSize(width: width, height: height)
+    }
+
+    private func expandedPillContentWidth() -> CGFloat {
+        guard showHoldPromptInPill else {
+            return overlayState.isHandsFree
+                ? OverlayLayout.pillHandsFreeContentWidth
+                : OverlayLayout.pillRegularContentWidth
+        }
+
+        let suffix = overlayState.onboardingStep == .welcome ? "to finish" : "to continue"
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let keyFont = NSFont.systemFont(ofSize: 12, weight: .semibold)
+        let textWidth = ("Hold " as NSString).size(withAttributes: [.font: font]).width
+            + (overlayState.hotkeyLabel as NSString).size(withAttributes: [.font: keyFont]).width
+            + (suffix as NSString).size(withAttributes: [.font: font]).width
+        return textWidth + 20 + 6 + 24
+    }
+
+    private var showHoldPromptInPill: Bool {
+        guard let step = overlayState.onboardingStep, overlayState.mode == .idle || overlayState.mode == .noSpeech else {
+            return false
+        }
+        switch step {
+        case .apiTip, .formattingTip, .welcome:
+            return true
+        default:
+            return false
         }
     }
 }
