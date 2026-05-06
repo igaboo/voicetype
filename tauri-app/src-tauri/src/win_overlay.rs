@@ -74,9 +74,10 @@ const IDLE_CONTENT_W: f32 = 64.0; // 40px empty target + 12px horizontal padding
 const HANDS_FREE_CONTENT_W: f32 = 138.0; // 124px controls + 7px horizontal padding on each side.
 const EXPANDED_PILL_H: f32 = 40.0;
 const IDLE_PILL_H: f32 = 20.0;
-const PILL_HIT_PADDING: f32 = 12.0;
+const PILL_HIT_PADDING: f32 = 12.0; // Keep in sync with macOS OverlayLayout.pillHitPadding.
 const CONTROL_BUTTON_OFFSET: f32 = 49.0;
 const CONTROL_HIT_RADIUS: f32 = 17.0;
+const CONTROL_HIT_PADDING: f32 = 8.0;
 const GRADIENT_OFFSET_Y: f32 = 18.0;
 const GRADIENT_MOTION_SCALE: f32 = 0.38;
 const GRADIENT_DITHER_ALPHA: f32 = 3.0;
@@ -1093,7 +1094,8 @@ fn hit_target_from_current_geometry(point: POINT) -> Option<HitTarget> {
             CONTROL_BUTTON_OFFSET * geom.content_scale * hands_free_hit_progress(&state, &geom);
         let pause_cx = geom.content_cx - button_offset;
         let stop_cx = geom.content_cx + button_offset;
-        let control_hit_radius = CONTROL_HIT_RADIUS * geom.content_scale.max(0.75) + 8.0;
+        let control_hit_radius =
+            CONTROL_HIT_RADIUS * geom.content_scale.max(0.75) + CONTROL_HIT_PADDING;
 
         if distance(x, y, pause_cx, geom.pill_cy) <= control_hit_radius {
             return Some(HitTarget::Pause);
