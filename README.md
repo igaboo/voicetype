@@ -37,43 +37,43 @@ https://github.com/oobagi/yap/releases/latest
 
 ## Features
 
-- **Push-to-talk**: Hold fn/Globe or Option on macOS, or the configured Windows trigger, then release to paste.
-- **Hands-free mode**: Double-tap the hotkey or click the floating pill to record without holding.
-- **Native-feeling overlay**: A floating waveform pill with recording, processing, pause, resume, and error states.
-- **Cross-platform shell**: Shared Tauri/Svelte UI with Rust orchestration and platform-native helpers where the OS needs them.
-- **Transcription providers**: Apple on-device speech, Gemini, OpenAI, Deepgram, and ElevenLabs.
-- **Formatting providers**: Gemini, OpenAI, Anthropic, and Groq with casual, formatted, and professional styles.
-- **Clipboard preservation**: Writes the transcript, simulates paste, then restores the previous clipboard.
+- Push-to-talk dictation: hold a hotkey, speak, release to paste.
+- Hands-free recording by double-tapping the hotkey or clicking the floating pill.
+- Transcription with Apple on-device speech, Gemini, OpenAI, Deepgram, or ElevenLabs.
+- Optional formatting with Gemini, OpenAI, Anthropic, or Groq.
+- Clipboard restore after paste.
+- Local speech checks so very short or silent recordings are discarded before paid APIs are called.
 
-## Usage
+## Set Up Transcription
 
-Yap supports three recording modes:
+Open the tray/menu bar icon, choose **Settings**, then pick a transcription provider.
 
-| Mode | How to use |
+| Provider | Key |
 |---|---|
-| Hold to record | Hold the configured hotkey, speak, release |
-| Hands-free double-tap | Double-tap the hotkey, speak, tap again to stop |
-| Hands-free pill | Click the floating pill, speak, click Stop |
+| On-device | No key needed. macOS only. |
+| [Gemini](https://ai.google.dev/gemini-api/docs/api-key) | Gemini API key |
+| [OpenAI](https://platform.openai.com/api-keys) | OpenAI API key |
+| [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys) | Deepgram API key |
+| [ElevenLabs](https://elevenlabs.io/docs/api-reference/authentication) | ElevenLabs API key |
 
-Short or silent recordings are discarded before paid APIs are called.
+Paste the key into **Settings -> Transcription -> API key**. Leave the model field blank to use Yap's default.
 
-## Permissions
+Windows does not have the macOS on-device option, so choose one of the API providers above.
 
-On macOS, grant these in System Settings -> Privacy & Security:
+## Optional Formatting
 
-| Permission | Why it is needed |
+Formatting can clean up the transcript after transcription. Choose **Casual**, **Formatted**, or **Professional**, then add a key if needed.
+
+| Provider | Key |
 |---|---|
-| Microphone | Record your voice |
-| Speech Recognition | On-device transcription and speech pre-checks |
-| Accessibility | Detect the global hotkey and paste into other apps |
+| [Gemini](https://ai.google.dev/gemini-api/docs/api-key) | Gemini API key |
+| [OpenAI](https://platform.openai.com/api-keys) | OpenAI API key |
+| [Anthropic](https://platform.claude.com/settings/keys) | Anthropic API key |
+| [Groq](https://console.groq.com/keys) | Groq API key |
 
-On Windows, allow microphone access.
+Paste the key into **Settings -> Formatting -> API key**. If formatting uses the same provider as transcription, Yap can reuse the transcription key.
 
-## Configuration
-
-Open the tray/menu bar icon -> **Settings**. Config is stored at `~/.config/yap/config.json`.
-
-Empty model fields use provider defaults. Formatting can reuse the transcription API key when its own key is blank.
+Your settings are stored locally in `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\config.json` on Windows.
 
 ## Build From Source
 
@@ -88,16 +88,6 @@ npm run tauri -- build      # create app bundles/installers
 ```
 
 macOS builds require Xcode Command Line Tools for the Swift overlay sidecar. Windows builds require the standard Tauri Windows toolchain.
-
-## Project Layout
-
-| Path | Purpose |
-|---|---|
-| `tauri-app/src-tauri/src/` | Rust app orchestration, audio, hotkeys, tray, paste, providers, and Windows overlay |
-| `tauri-app/src/` | Svelte settings, history, and overlay views |
-| `tauri-app/src-tauri/sidecar-overlay/` | macOS Swift/AppKit overlay sidecar |
-| `tauri-app/src-tauri/icons/` | App and tray icon assets used by Tauri |
-| `tauri-app/src-tauri/sounds/` | Bundled app sounds |
 
 ## License
 
