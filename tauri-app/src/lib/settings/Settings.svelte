@@ -17,6 +17,7 @@
   interface AppConfig {
     hotkey: string;
     audioDevice: string;
+    pressEnterAfterPaste: boolean;
     txProvider: string;
     txApiKey: string;
     txModel: string;
@@ -112,6 +113,7 @@
   let webLastHotkey = '';
   let microphones = $state<string[]>([]);
   let selectedMic = $state('');
+  let pressEnterAfterPaste = $state(false);
 
   // Transcription
   let txProvider = $state(defaultTxProvider);
@@ -197,6 +199,7 @@
       const cfg = await invoke<AppConfig>('get_config');
       hotkey = cfg.hotkey;
       selectedMic = cfg.audioDevice ?? '';
+      pressEnterAfterPaste = cfg.pressEnterAfterPaste ?? false;
       txProvider = isWindows && cfg.txProvider === 'none' ? defaultTxProvider : cfg.txProvider;
       txApiKey = cfg.txApiKey;
       txModel = cfg.txModel;
@@ -246,6 +249,7 @@
       const cfg: AppConfig = {
         hotkey,
         audioDevice: selectedMic,
+        pressEnterAfterPaste,
         txProvider,
         txApiKey,
         txModel,
@@ -490,6 +494,7 @@
   function resetDefaults() {
     hotkey = defaultHotkey;
     selectedMic = '';
+    pressEnterAfterPaste = false;
     txProvider = defaultTxProvider;
     txApiKey = '';
     txModel = '';
@@ -597,6 +602,20 @@
                 ? 'Press the exact key or combination. Fn works only on keyboards that expose it to Windows.'
                 : 'Press the exact key or combination. Fn/Globe is captured natively.'}
             </span>
+          </div>
+
+          <div class="field-divider"></div>
+
+          <div class="toggle-row">
+            <div class="toggle-info">
+              <span class="toggle-label">Press Enter after paste</span>
+              <span class="toggle-description">Send Return after Yap inserts the transcription</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" bind:checked={pressEnterAfterPaste} />
+              <span class="toggle-track"></span>
+              <span class="toggle-thumb"></span>
+            </label>
           </div>
 
           <div class="field-divider"></div>

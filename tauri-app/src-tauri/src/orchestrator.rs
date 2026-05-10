@@ -1263,7 +1263,7 @@ impl Orchestrator {
                         }
 
                         // Paste the result
-                        if let Err(e) = paste::paste_text(&text) {
+                        if let Err(e) = paste::paste_text(&text, cfg.press_enter_after_paste) {
                             log::info(&format!("Paste failed: {e}"));
                         }
                     }
