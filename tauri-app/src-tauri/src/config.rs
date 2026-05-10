@@ -19,6 +19,10 @@ pub struct AppConfig {
     #[serde(default)]
     pub audio_device: String,
 
+    /// Press Return/Enter after pasting the transcription.
+    #[serde(default)]
+    pub press_enter_after_paste: bool,
+
     /// Transcription provider
     #[serde(default)]
     pub tx_provider: TranscriptionProvider,
@@ -137,6 +141,7 @@ impl Default for AppConfig {
         Self {
             hotkey: default_hotkey(),
             audio_device: String::new(),
+            press_enter_after_paste: false,
             tx_provider: TranscriptionProvider::default(),
             tx_api_key: String::new(),
             tx_model: String::new(),
