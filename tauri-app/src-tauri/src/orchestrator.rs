@@ -178,8 +178,9 @@ impl OrchestratorInner {
         generation
     }
 
-    fn begin_recording(&mut self) -> u64 {
-        self.state = AppState::Recording;
+    fn begin_hands_free_recording(&mut self, ignore_pending_key_up: bool) -> u64 {
+        self.state = AppState::HandsFreeRecording;
+        self.ignore_pending_key_up = ignore_pending_key_up;
         self.reset_recording_clock();
         self.peak_level = 0.0;
         self.recording_generation = self.recording_generation.wrapping_add(1);
@@ -527,6 +528,82 @@ impl Orchestrator {
         generation
     }
 
+    fn start_fresh_hands_free_audio(
+        &self,
+        app: AppHandle,
+        generation: u64,
+        onboarding: Option<(OnboardingStep, OnboardingStep)>,
+        started_log: &'static str,
+        failed_log_prefix: &'static str,
+    ) {
+        let orch = app.state::<Arc<Orchestrator>>();
+        let orch = Arc::clone(&orch);
+
+        std::thread::Builder::new()
+            .name("yap-hands-free-audio-start".into())
+            .spawn(move || {
+                play_pre_recording_sound(&app, SOUND_HANDS_FREE);
+
+                let should_start = {
+                    let inner = orch.inner.lock().unwrap();
+                    inner.recording_generation == generation
+                        && matches!(
+                            inner.state,
+                            AppState::HandsFreeRecording | AppState::HandsFreePaused
+                        )
+                };
+                if !should_start {
+                    return;
+                }
+
+                match start_configured_recording() {
+                    Ok(_) => {
+                        let paused = {
+                            let inner = orch.inner.lock().unwrap();
+                            if inner.recording_generation != generation {
+                                None
+                            } else {
+                                match inner.state {
+                                    AppState::HandsFreeRecording => Some(false),
+                                    AppState::HandsFreePaused => Some(true),
+                                    _ => None,
+                                }
+                            }
+                        };
+
+                        match paused {
+                            Some(true) => audio::pause_recording(),
+                            Some(false) => {}
+                            None => {
+                                let _ = audio::stop_recording();
+                                audio_ducking::end();
+                                return;
+                            }
+                        }
+
+                        log::info(started_log);
+                        if let Some((expected_step, next_step)) = onboarding {
+                            orch.complete_onboarding_recording_action(expected_step, next_step);
+                        }
+                    }
+                    Err(e) => {
+                        log::info(&format!("{failed_log_prefix}: {e}"));
+                        let mut inner = orch.inner.lock().unwrap();
+                        if inner.recording_generation == generation
+                            && matches!(
+                                inner.state,
+                                AppState::HandsFreeRecording | AppState::HandsFreePaused
+                            )
+                        {
+                            inner.state = AppState::Idle;
+                            inner.emit_error(&format!("Recording failed: {e}"));
+                        }
+                    }
+                }
+            })
+            .ok();
+    }
+
     // -- Key event handlers -----------------------------------------------
 
     /// Called by the hotkey module when the modifier key is pressed.
@@ -746,31 +823,16 @@ impl Orchestrator {
             }
             AppState::Idle | AppState::PressPending | AppState::TapPending => {
                 let app = inner.app.clone();
-                inner.begin_recording();
+                let generation = inner.begin_hands_free_recording(true);
                 drop(inner);
 
-                play_pre_recording_sound(&app, SOUND_HANDS_FREE);
-
-                match start_configured_recording() {
-                    Ok(_) => {
-                        let mut inner = self.inner.lock().unwrap();
-                        inner.state = AppState::HandsFreeRecording;
-                        inner.ignore_pending_key_up = true;
-                        inner.emit_state();
-                        drop(inner);
-                        log::info("Hands-free recording started");
-                        self.complete_onboarding_recording_action(
-                            OnboardingStep::DoubleTapTip,
-                            OnboardingStep::ClickTip,
-                        );
-                    }
-                    Err(e) => {
-                        log::info(&format!("Failed to start recording: {e}"));
-                        let mut inner = self.inner.lock().unwrap();
-                        inner.state = AppState::Idle;
-                        inner.emit_error(&format!("Recording failed: {e}"));
-                    }
-                }
+                self.start_fresh_hands_free_audio(
+                    app,
+                    generation,
+                    Some((OnboardingStep::DoubleTapTip, OnboardingStep::ClickTip)),
+                    "Hands-free recording started",
+                    "Failed to start recording",
+                );
             }
             _ => {}
         }
@@ -872,31 +934,16 @@ impl Orchestrator {
             AppState::Idle => {
                 // Start click-to-record (hands-free)
                 let app = inner.app.clone();
-                inner.begin_recording();
+                let generation = inner.begin_hands_free_recording(false);
                 drop(inner);
 
-                play_pre_recording_sound(&app, SOUND_HANDS_FREE);
-
-                match start_configured_recording() {
-                    Ok(_) => {
-                        let mut inner = self.inner.lock().unwrap();
-                        inner.state = AppState::HandsFreeRecording;
-                        inner.ignore_pending_key_up = false;
-                        inner.emit_state();
-                        drop(inner);
-                        log::info("Pill click: hands-free recording started");
-                        self.complete_onboarding_recording_action(
-                            OnboardingStep::ClickTip,
-                            OnboardingStep::ApiTip,
-                        );
-                    }
-                    Err(e) => {
-                        log::info(&format!("Pill click: failed to start recording: {e}"));
-                        let mut inner = self.inner.lock().unwrap();
-                        inner.state = AppState::Idle;
-                        inner.emit_error(&format!("Recording failed: {e}"));
-                    }
-                }
+                self.start_fresh_hands_free_audio(
+                    app,
+                    generation,
+                    Some((OnboardingStep::ClickTip, OnboardingStep::ApiTip)),
+                    "Pill click: hands-free recording started",
+                    "Pill click: failed to start recording",
+                );
             }
             AppState::Recording => {
                 // Convert hold-to-record into hands-free
