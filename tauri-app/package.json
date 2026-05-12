@@ -1,6 +1,6 @@
 {
   "name": "yap",
-  "version": "2.3.0",
+  "version": "2.3.1",
   "description": "Cross-platform voice-to-text tray app",
   "type": "module",
   "scripts": {
@@ -16,7 +16,9 @@
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-autostart": "^2.5.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "@tauri-apps/plugin-opener": "^2"
+    "@tauri-apps/plugin-opener": "^2",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.1"
   },
   "overrides": {
     "cookie": "0.7.2"

@@ -2,7 +2,7 @@
   /**
    * Full settings UI for the Yap Tauri app.
    *
-   * Sections: General, Transcription, Formatting, Behavior, History, Advanced
+   * Sections: General, Transcription, Formatting, History, Advanced
    * Loads/saves config via Tauri invoke commands.
    * Dark theme matching the overlay pill aesthetic.
    */
@@ -12,6 +12,7 @@
   import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onDestroy } from 'svelte';
+  import type { DownloadEvent, Update } from '@tauri-apps/plugin-updater';
 
   // ── Config Shape (matches Rust AppConfig with camelCase serde) ─────────
 
@@ -134,15 +135,15 @@
     groq: 'Groq',
   };
 
-  type SectionId = 'general' | 'transcription' | 'formatting' | 'behavior' | 'history' | 'advanced';
+  type SectionId = 'general' | 'transcription' | 'formatting' | 'history' | 'advanced';
+  type UpdateStatus = 'idle' | 'checking' | 'available' | 'upToDate' | 'downloading' | 'ready' | 'error';
 
   const settingsSections: Array<{ id: SectionId; label: string; description: string }> = [
-    { id: 'general', label: 'General', description: 'Shortcut and microphone' },
+    { id: 'general', label: 'General', description: 'Shortcut, microphone, and behavior' },
     { id: 'transcription', label: 'Transcription', description: 'Provider, model, and accuracy' },
     { id: 'formatting', label: 'Formatting', description: 'Cleanup provider and style' },
-    { id: 'behavior', label: 'Behavior', description: 'Paste, audio, and launch' },
     { id: 'history', label: 'History', description: 'Saved transcripts' },
-    { id: 'advanced', label: 'Advanced', description: 'Onboarding and reset' },
+    { id: 'advanced', label: 'Advanced', description: 'Updates and reset' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -224,6 +225,14 @@
 
   // Advanced
   let onboardingComplete = $state(false);
+
+  // Updates
+  let updateStatus = $state<UpdateStatus>('idle');
+  let updateMessage = $state('Check for a signed Yap release from GitHub.');
+  let updateVersion = $state('');
+  let updateDownloaded = $state(0);
+  let updateTotal = $state<number | null>(null);
+  let pendingUpdate: Update | null = null;
 
   // ── Derived ───────────────────────────────────────────────────────────
 
@@ -744,6 +753,112 @@
     }
   }
 
+  // ── Updates ───────────────────────────────────────────────────────────
+
+  function updateBusy(): boolean {
+    return updateStatus === 'checking' || updateStatus === 'downloading' || updateStatus === 'ready';
+  }
+
+  function updateProgress(): number {
+    if (updateStatus === 'ready') return 100;
+    if (!updateTotal || updateTotal <= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((updateDownloaded / updateTotal) * 100)));
+  }
+
+  function updateProgressLabel(): string {
+    if (updateStatus === 'ready') return 'Installed';
+    if (!updateTotal) return formatBytes(updateDownloaded);
+    return `${formatBytes(updateDownloaded)} of ${formatBytes(updateTotal)}`;
+  }
+
+  function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
+    const megabytes = bytes / 1024 / 1024;
+    if (megabytes < 10) return `${megabytes.toFixed(1)} MB`;
+    return `${Math.round(megabytes)} MB`;
+  }
+
+  function updaterErrorMessage(error: unknown): string {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('latest.json') || message.includes('release JSON')) {
+      return 'No signed update feed is available yet. Try again after the next release finishes.';
+    }
+    if (message.includes('signature')) {
+      return 'The update could not be verified, so Yap did not install it.';
+    }
+    return message || 'Update failed.';
+  }
+
+  async function checkForUpdates() {
+    if (!isTauriRuntime || updateBusy()) return;
+
+    pendingUpdate = null;
+    updateVersion = '';
+    updateDownloaded = 0;
+    updateTotal = null;
+    updateStatus = 'checking';
+    updateMessage = 'Checking for updates...';
+
+    try {
+      const { check } = await import('@tauri-apps/plugin-updater');
+      const update = await check({ timeout: 30000 });
+
+      if (!update) {
+        updateStatus = 'upToDate';
+        updateMessage = 'Yap is up to date.';
+        return;
+      }
+
+      pendingUpdate = update;
+      updateVersion = update.version;
+      updateStatus = 'available';
+      updateMessage = `Yap ${update.version} is ready to install.`;
+    } catch (error) {
+      pendingUpdate = null;
+      updateStatus = 'error';
+      updateMessage = updaterErrorMessage(error);
+      console.error('Failed to check for updates:', error);
+    }
+  }
+
+  async function installUpdate() {
+    if (!pendingUpdate || updateBusy()) return;
+
+    const version = pendingUpdate.version;
+    const confirmed = await confirmAction(
+      `Install Yap ${version}? Yap will restart after the update finishes.`,
+      'Install'
+    );
+    if (!confirmed || !pendingUpdate) return;
+
+    updateStatus = 'downloading';
+    updateDownloaded = 0;
+    updateTotal = null;
+    updateMessage = `Downloading Yap ${version}...`;
+
+    try {
+      const update = pendingUpdate;
+      await update.downloadAndInstall((event: DownloadEvent) => {
+        if (event.event === 'Started') {
+          updateTotal = event.data.contentLength ?? null;
+          updateDownloaded = 0;
+        } else if (event.event === 'Progress') {
+          updateDownloaded += event.data.chunkLength;
+        } else if (event.event === 'Finished') {
+          updateStatus = 'ready';
+          updateMessage = 'Update installed. Restarting Yap...';
+        }
+      });
+
+      const { relaunch } = await import('@tauri-apps/plugin-process');
+      await relaunch();
+    } catch (error) {
+      updateStatus = 'error';
+      updateMessage = updaterErrorMessage(error);
+      console.error('Failed to install update:', error);
+    }
+  }
+
   // ── Reset Onboarding ─────────────────────────────────────────────────
 
   async function confirmAction(message: string, okLabel: string): Promise<boolean> {
@@ -823,6 +938,7 @@
   let unlistenHotkeyPreview: (() => void) | undefined;
   let unlistenHotkeyCapture: (() => void) | undefined;
   let unlistenShowHistory: (() => void) | undefined;
+  let unlistenShowUpdates: (() => void) | undefined;
   let unlistenHistoryCleared: (() => void) | undefined;
 
   if (isTauriRuntime) {
@@ -872,6 +988,15 @@
       });
 
     getCurrentWindow()
+      .listen('settings:show-updates', () => {
+        activeSection = 'advanced';
+        void checkForUpdates();
+      })
+      .then((fn) => {
+        unlistenShowUpdates = fn;
+      });
+
+    getCurrentWindow()
       .listen('tray:history-cleared', () => {
         if (activeSection === 'history' || historyLoadStarted) {
           void loadHistory();
@@ -887,6 +1012,7 @@
     unlistenHotkeyPreview?.();
     unlistenHotkeyCapture?.();
     unlistenShowHistory?.();
+    unlistenShowUpdates?.();
     unlistenHistoryCleared?.();
     if (saveTimer) clearTimeout(saveTimer);
     for (const timeout of copyTimeouts.values()) {
@@ -995,6 +1121,90 @@
                     <option value="">No devices found</option>
                   {/if}
                 </select>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Start with system</span>
+                  <span class="toggle-description">Launch Yap automatically when you log in</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={startWithSystem} onchange={() => { void toggleAutostart(startWithSystem); }} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Press Enter after paste</span>
+                  <span class="toggle-description">Send Return after Yap inserts the transcription</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={pressEnterAfterPaste} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Sound effects</span>
+                  <span class="toggle-description">Play cues for recording, completion, and errors</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={soundsEnabled} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Quiet background audio</span>
+                  <span class="toggle-description">Reduce or mute other app audio while recording</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={quietAudioWhileRecording} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Gradient background</span>
+                  <span class="toggle-description">Show the animated gradient in the overlay pill</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={gradientEnabled} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Always-visible pill</span>
+                  <span class="toggle-description">Keep the overlay pill visible even when idle</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={alwaysVisiblePill} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
               </div>
             </div>
           </section>
@@ -1257,94 +1467,6 @@
           </section>
         {/if}
 
-        {#if activeSection === 'behavior'}
-          <section class="settings-section" aria-label="Behavior settings">
-            <div class="section-body">
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Press Enter after paste</span>
-                  <span class="toggle-description">Send Return after Yap inserts the transcription</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={pressEnterAfterPaste} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Sound effects</span>
-                  <span class="toggle-description">Play cues for recording, completion, and errors</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={soundsEnabled} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Quiet background audio</span>
-                  <span class="toggle-description">Reduce or mute other app audio while recording</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={quietAudioWhileRecording} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Gradient background</span>
-                  <span class="toggle-description">Show the animated gradient in the overlay pill</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={gradientEnabled} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Always-visible pill</span>
-                  <span class="toggle-description">Keep the overlay pill visible even when idle</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={alwaysVisiblePill} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Start with system</span>
-                  <span class="toggle-description">Launch Yap automatically when you log in</span>
-                </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={startWithSystem} onchange={() => { void toggleAutostart(startWithSystem); }} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
-              </div>
-            </div>
-          </section>
-        {/if}
-
         {#if activeSection === 'history'}
           <section class="settings-section" aria-label="History settings">
             <div class="section-body">
@@ -1454,6 +1576,46 @@
         {#if activeSection === 'advanced'}
           <section class="settings-section" aria-label="Advanced settings">
             <div class="section-body">
+              <div class="action-row">
+                <div class="field-copy">
+                  <span class="field-label">Software updates</span>
+                  <span class="field-description">{updateMessage}</span>
+                </div>
+                {#if updateStatus === 'available'}
+                  <button class="btn btn-primary" onclick={installUpdate} type="button">
+                    Install Update
+                  </button>
+                {:else}
+                  <button class="btn btn-secondary" onclick={checkForUpdates} type="button" disabled={updateBusy()}>
+                    {updateStatus === 'checking' ? 'Checking...' : 'Check for Updates'}
+                  </button>
+                {/if}
+              </div>
+
+              {#if updateStatus === 'downloading' || updateStatus === 'ready'}
+                <div class="update-progress" aria-label="Update progress">
+                  <div class="update-progress-header">
+                    <span>{updateStatus === 'ready' ? 'Installed' : 'Downloading'}</span>
+                    <span>{updateProgressLabel()}</span>
+                  </div>
+                  <div class="update-progress-track">
+                    <div class="update-progress-fill" style={`width: ${updateProgress()}%`}></div>
+                  </div>
+                </div>
+              {/if}
+
+              {#if updateStatus === 'available' && updateVersion}
+                <div class="section-footer">
+                  Version {updateVersion} will be verified before it is installed.
+                </div>
+              {:else if updateStatus === 'error'}
+                <div class="section-footer update-error">
+                  Yap did not install anything.
+                </div>
+              {/if}
+
+              <div class="field-divider"></div>
+
               <div class="action-row">
                 <div class="field-copy">
                   <span class="field-label">Onboarding</span>

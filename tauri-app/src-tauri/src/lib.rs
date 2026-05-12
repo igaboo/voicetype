@@ -116,6 +116,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_autostart::init(
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             None,
@@ -126,6 +127,7 @@ pub fn run() {
             // the hotkey listener, sets up the tray, and begins the
             // audio level poller.
             let handle = app.handle().clone();
+            handle.plugin(tauri_plugin_updater::Builder::new().build())?;
             orchestrator::init(&handle);
             windows::hide_app_if_no_windows_visible(&handle);
 

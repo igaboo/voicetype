@@ -1,6 +1,6 @@
 [package]
 name = "yap"
-version = "2.3.0"
+version = "2.3.1"
 description = "Yap - Cross-platform voice-to-text"
 authors = ["you"]
 edition = "2021"
@@ -59,6 +59,8 @@ once_cell = "1"
 fontdue = "0.9"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-dialog = "2"
+tauri-plugin-updater = "2.10.1"
+tauri-plugin-process = "2.3.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
