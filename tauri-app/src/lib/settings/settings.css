@@ -8,6 +8,10 @@
   --settings-border: #343434;
   --settings-border-muted: #1f1f1f;
   --settings-text-muted: #707070;
+  --settings-primary: #0a84ff;
+  --settings-primary-hover: #409cff;
+  --settings-primary-soft: rgba(10, 132, 255, 0.14);
+  --settings-primary-border: rgba(10, 132, 255, 0.42);
   --settings-radius-input: 7px;
   --settings-radius-button: 7px;
   --settings-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -28,6 +32,7 @@ body {
 button,
 input,
 select {
+  accent-color: var(--settings-primary);
   font: inherit;
 }
 
@@ -237,7 +242,7 @@ button {
 
 .input:focus,
 .select:focus {
-  border-color: #484848;
+  border-color: var(--settings-primary-border);
 }
 
 .input:disabled {
@@ -312,6 +317,7 @@ button {
   border: 1px solid var(--settings-border);
   border-radius: 999px;
   background: var(--settings-surface);
+  transition: border-color 120ms ease, background 120ms ease;
 }
 
 .toggle-thumb {
@@ -322,11 +328,17 @@ button {
   height: 18px;
   border-radius: 50%;
   background: CanvasText;
+  transition: transform 120ms ease;
 }
 
 .toggle-switch input:checked + .toggle-track {
-  border-color: #2f2f2f;
-  background: #303030;
+  border-color: var(--settings-primary);
+  background: var(--settings-primary);
+}
+
+.toggle-switch:hover input:checked + .toggle-track {
+  border-color: var(--settings-primary-hover);
+  background: var(--settings-primary-hover);
 }
 
 .toggle-switch input:checked ~ .toggle-thumb {
@@ -373,7 +385,8 @@ button {
 }
 
 .hotkey-button.capturing {
-  border-color: #484848;
+  border-color: var(--settings-primary-border);
+  background: var(--settings-primary-soft);
 }
 
 .slider-row {
@@ -431,8 +444,8 @@ button {
 }
 
 .style-option input:checked + label {
-  border-color: #484848;
-  background: #303030;
+  border-color: var(--settings-primary-border);
+  background: var(--settings-primary-soft);
 }
 
 .style-preview {
