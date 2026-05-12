@@ -25,16 +25,6 @@
         "hiddenTitle": true,
         "acceptFirstMouse": true,
         "resizable": false
-      },
-      {
-        "label": "history",
-        "title": "Transcription History",
-        "url": "/history.html",
-        "width": 520,
-        "height": 500,
-        "visible": false,
-        "center": true,
-        "resizable": false
       }
     ],
     "security": {

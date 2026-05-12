@@ -634,7 +634,7 @@ When `alwaysVisiblePill` is true, the pill remains on screen in idle state (mini
 
 - Shows up to 10 most recent entries, truncated to 60 characters with ellipsis.
 - Clicking an entry copies its full text to clipboard.
-- "Show All..." opens the History window.
+- "Show All..." opens the History section in Settings.
 - "Clear History" clears all entries (disabled when empty).
 - Menu is rebuilt each time it opens.
 

@@ -23,5 +23,5 @@ npm run tauri -- build
 - `src-tauri/icons/` - app, Windows, macOS, and tray icons.
 - `src-tauri/sounds/` - bundled feedback sounds.
 - `src/lib/settings/` - settings UI.
-- `src/lib/history/` - history UI.
+- `src/lib/settings/` - settings UI, including transcription history.
 - `src/lib/overlay/` - overlay UI.

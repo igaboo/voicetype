@@ -48,8 +48,7 @@ Hotkey provider
 - `tauri-app/src-tauri/src/win_overlay.rs` - Windows native overlay implementation.
 - `tauri-app/src-tauri/src/sidecar.rs` - macOS overlay sidecar process management.
 - `tauri-app/src-tauri/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS.
-- `tauri-app/src/lib/settings/` - Svelte settings UI.
-- `tauri-app/src/lib/history/` - Svelte history UI.
+- `tauri-app/src/lib/settings/` - Svelte settings UI, including transcription history.
 - `tauri-app/src/lib/overlay/` - Svelte overlay view used where needed.
 
 ## Config

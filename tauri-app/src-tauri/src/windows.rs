@@ -1,6 +1,6 @@
 use tauri::{AppHandle, Manager, WebviewWindow, Window, WindowEvent};
 
-const APP_WINDOW_LABELS: &[&str] = &["settings", "history"];
+const APP_WINDOW_LABELS: &[&str] = &["settings"];
 
 pub fn show_app_window(app: &AppHandle, label: &str) -> Result<(), String> {
     let window = app

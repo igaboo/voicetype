@@ -71,6 +71,12 @@ fn clear_history() -> Result<(), String> {
     history::clear()
 }
 
+/// Refresh the tray history submenu after frontend history edits.
+#[tauri::command]
+fn refresh_history_menu(app: tauri::AppHandle) {
+    tray::refresh_history_menu(&app);
+}
+
 /// Show the settings window. Used by the fallback root route.
 #[tauri::command]
 fn show_settings(app: tauri::AppHandle) -> Result<(), String> {
@@ -142,6 +148,7 @@ pub fn run() {
             get_history,
             remove_history_entry,
             clear_history,
+            refresh_history_menu,
             show_settings,
             hide_app_window,
             start_hotkey_capture,

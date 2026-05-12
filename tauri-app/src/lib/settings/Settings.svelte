@@ -42,6 +42,15 @@
     speechLocale: string;
   }
 
+  interface HistoryEntry {
+    id: string;
+    timestamp: string;
+    text: string;
+    transcriptionProvider: string;
+    formattingProvider: string | null;
+    formattingStyle: string | null;
+  }
+
   // ── Provider Metadata ─────────────────────────────────────────────────
 
   const isWindows = navigator.userAgent.toLowerCase().includes('windows');
@@ -101,6 +110,16 @@
 
   const styleExampleInput = 'yeah i was thinking we could try that new place on friday if youre free';
   const modifierOrder = ['cmd', 'ctrl', 'option', 'shift', 'fn'];
+
+  const providerLabels: Record<string, string> = {
+    none: 'On-device',
+    gemini: 'Gemini',
+    openai: 'OpenAI',
+    deepgram: 'Deepgram',
+    elevenlabs: 'ElevenLabs',
+    anthropic: 'Anthropic',
+    groq: 'Groq',
+  };
 
   type SectionId = 'general' | 'transcription' | 'formatting' | 'behavior' | 'history' | 'advanced';
 
@@ -186,6 +205,11 @@
 
   // History
   let historyEnabled = $state(true);
+  let historyLoading = $state(true);
+  let historyEntries = $state<HistoryEntry[]>([]);
+  let copiedHistoryId = $state<string | null>(null);
+  let historyLoadStarted = false;
+  let copyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Advanced
   let speechLocale = $state('');
@@ -382,6 +406,9 @@
       }
     }
     activeSection = section;
+    if (section === 'history') {
+      void loadHistory();
+    }
   }
 
   async function toggleHotkeyCapture() {
@@ -580,9 +607,105 @@
       .join('+');
   }
 
+  // ── History Entries ──────────────────────────────────────────────────
+
+  async function loadHistory() {
+    historyLoadStarted = true;
+    historyLoading = true;
+
+    if (!isTauriRuntime) {
+      historyEntries = [];
+      historyLoading = false;
+      return;
+    }
+
+    try {
+      historyEntries = await invoke<HistoryEntry[]>('get_history');
+    } catch (e) {
+      console.error('Failed to load history:', e);
+      historyEntries = [];
+    }
+
+    historyLoading = false;
+  }
+
+  function providerLabel(tx: string, fmt: string | null): string {
+    const txLabel = providerLabels[tx] ?? tx;
+    if (!fmt || fmt === 'none') return txLabel;
+    const fmtLabel = providerLabels[fmt] ?? fmt;
+    if (txLabel === fmtLabel) return txLabel;
+    return `${txLabel} + ${fmtLabel}`;
+  }
+
+  function relativeTime(isoString: string): string {
+    const now = Date.now();
+    const then = new Date(isoString).getTime();
+    const diffMs = now - then;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHr = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHr / 24);
+
+    if (Number.isNaN(then)) return '';
+    if (diffSec < 10) return 'just now';
+    if (diffSec < 60) return `${diffSec}s ago`;
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffHr < 24) return `${diffHr}h ago`;
+    if (diffDay === 1) return 'Yesterday';
+    if (diffDay < 7) return `${diffDay}d ago`;
+    if (diffDay < 30) return `${Math.floor(diffDay / 7)}w ago`;
+    return new Date(isoString).toLocaleDateString();
+  }
+
+  async function copyHistoryEntry(entry: HistoryEntry) {
+    try {
+      await navigator.clipboard.writeText(entry.text);
+
+      const existing = copyTimeouts.get(entry.id);
+      if (existing) clearTimeout(existing);
+
+      copiedHistoryId = entry.id;
+      const timeout = setTimeout(() => {
+        if (copiedHistoryId === entry.id) copiedHistoryId = null;
+      }, 1500);
+      copyTimeouts.set(entry.id, timeout);
+    } catch (e) {
+      console.error('Failed to copy history entry:', e);
+    }
+  }
+
+  async function deleteHistoryEntry(id: string) {
+    if (!isTauriRuntime) return;
+
+    try {
+      await invoke('remove_history_entry', { id });
+      historyEntries = historyEntries.filter((entry) => entry.id !== id);
+      void invoke('refresh_history_menu');
+    } catch (e) {
+      console.error('Failed to delete history entry:', e);
+    }
+  }
+
+  async function clearHistoryEntries() {
+    const count = historyEntries.length;
+    const confirmed = await confirmAction(
+      `Clear all history? This will permanently delete ${count} transcription ${count === 1 ? 'entry' : 'entries'}.`,
+      'Clear'
+    );
+    if (!confirmed || !isTauriRuntime) return;
+
+    try {
+      await invoke('clear_history');
+      historyEntries = [];
+      void invoke('refresh_history_menu');
+    } catch (e) {
+      console.error('Failed to clear history:', e);
+    }
+  }
+
   // ── Reset Onboarding ─────────────────────────────────────────────────
 
-  async function confirmReset(message: string): Promise<boolean> {
+  async function confirmAction(message: string, okLabel: string): Promise<boolean> {
     if (!isTauriRuntime) {
       return window.confirm(message);
     }
@@ -590,9 +713,13 @@
     return confirmDialog(message, {
       title: 'Yap',
       kind: 'warning',
-      okLabel: 'Reset',
+      okLabel,
       cancelLabel: 'Cancel',
     });
+  }
+
+  async function confirmReset(message: string): Promise<boolean> {
+    return confirmAction(message, 'Reset');
   }
 
   async function resetOnboarding() {
@@ -657,6 +784,8 @@
   let unlistenFocus: (() => void) | undefined;
   let unlistenHotkeyPreview: (() => void) | undefined;
   let unlistenHotkeyCapture: (() => void) | undefined;
+  let unlistenShowHistory: (() => void) | undefined;
+  let unlistenHistoryCleared: (() => void) | undefined;
 
   if (isTauriRuntime) {
     getCurrentWindow()
@@ -664,6 +793,9 @@
         if (focused) {
           loading = true;
           loadConfig();
+          if (activeSection === 'history' || historyLoadStarted) {
+            void loadHistory();
+          }
         }
       })
       .then((fn) => {
@@ -687,13 +819,37 @@
       .then((fn) => {
         unlistenHotkeyCapture = fn;
       });
+
+    getCurrentWindow()
+      .listen('settings:show-history', () => {
+        activeSection = 'history';
+        void loadHistory();
+      })
+      .then((fn) => {
+        unlistenShowHistory = fn;
+      });
+
+    getCurrentWindow()
+      .listen('tray:history-cleared', () => {
+        if (activeSection === 'history' || historyLoadStarted) {
+          void loadHistory();
+        }
+      })
+      .then((fn) => {
+        unlistenHistoryCleared = fn;
+      });
   }
 
   onDestroy(() => {
     unlistenFocus?.();
     unlistenHotkeyPreview?.();
     unlistenHotkeyCapture?.();
+    unlistenShowHistory?.();
+    unlistenHistoryCleared?.();
     if (saveTimer) clearTimeout(saveTimer);
+    for (const timeout of copyTimeouts.values()) {
+      clearTimeout(timeout);
+    }
     if (isTauriRuntime) {
       void invoke('cancel_hotkey_capture');
     }
@@ -1160,6 +1316,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Save transcription history</span>
+                  <span class="toggle-description">Keep recent transcripts available for review and reuse</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={historyEnabled} />
@@ -1167,6 +1324,89 @@
                   <span class="toggle-thumb"></span>
                 </label>
               </div>
+
+              <div class="field-divider"></div>
+
+              <div class="history-toolbar">
+                <div class="field-copy">
+                  <span class="field-label">Transcription history</span>
+                  <span class="field-description">
+                    {#if historyLoading}
+                      Loading entries...
+                    {:else if historyEntries.length === 1}
+                      1 saved entry
+                    {:else}
+                      {historyEntries.length} saved entries
+                    {/if}
+                  </span>
+                </div>
+                <button
+                  class="btn btn-danger"
+                  onclick={clearHistoryEntries}
+                  type="button"
+                  disabled={historyLoading || historyEntries.length === 0}
+                >
+                  Clear
+                </button>
+              </div>
+
+              {#if historyLoading}
+                <div class="history-empty-state">
+                  <span>Loading...</span>
+                </div>
+              {:else if historyEntries.length === 0}
+                <div class="history-empty-state">
+                  <span class="history-empty-title">No transcriptions yet</span>
+                  <span class="field-description">Your saved transcriptions will appear here.</span>
+                </div>
+              {:else}
+                <div class="settings-history-list" aria-label="Saved transcriptions">
+                  {#each historyEntries as entry (entry.id)}
+                    <article class="settings-history-entry">
+                      <div class="history-entry-copy">
+                        <div class="history-entry-text">{entry.text}</div>
+                        <div class="history-entry-meta">
+                          <span>{relativeTime(entry.timestamp)}</span>
+                          <span class="history-badge">{providerLabel(entry.transcriptionProvider, entry.formattingProvider)}</span>
+                          {#if entry.formattingStyle && entry.formattingStyle !== 'none'}
+                            <span class="history-badge">{entry.formattingStyle}</span>
+                          {/if}
+                        </div>
+                      </div>
+                      <div class="history-entry-actions">
+                        <button
+                          class="icon-button"
+                          class:success={copiedHistoryId === entry.id}
+                          onclick={() => copyHistoryEntry(entry)}
+                          aria-label="Copy transcription"
+                          type="button"
+                        >
+                          {#if copiedHistoryId === entry.id}
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                              <polyline points="3.5 8.5 6.5 11.5 12.5 5.5"/>
+                            </svg>
+                          {:else}
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                              <rect x="5" y="5" width="9" height="9" rx="1.5"/>
+                              <path d="M3 11V3a1.5 1.5 0 0 1 1.5-1.5H11"/>
+                            </svg>
+                          {/if}
+                        </button>
+                        <button
+                          class="icon-button danger"
+                          onclick={() => deleteHistoryEntry(entry.id)}
+                          aria-label="Delete transcription"
+                          type="button"
+                        >
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M2 4h12M5.333 4V2.667a1.333 1.333 0 0 1 1.334-1.334h2.666a1.333 1.333 0 0 1 1.334 1.334V4m2 0v9.333a1.333 1.333 0 0 1-1.334 1.334H4.667a1.333 1.333 0 0 1-1.334-1.334V4h9.334Z"/>
+                          </svg>
+                        </button>
+                      </div>
+                    </article>
+                  {/each}
+                </div>
+              {/if}
             </div>
             {#if !historyEnabled}
               <div class="section-footer">

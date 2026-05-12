@@ -76,13 +76,13 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                     let _ = windows::show_app_window(app, "settings");
                 }
                 "show_history" => {
-                    let _ = windows::show_app_window(app, "history");
-                    let _ = app.emit("tray:show-history", ());
+                    let _ = windows::show_app_window(app, "settings");
+                    let _ = app.emit_to("settings", "settings:show-history", ());
                 }
                 "clear_history" => {
                     let _ = history::clear();
                     refresh_history_menu(app);
-                    let _ = app.emit("tray:history-cleared", ());
+                    let _ = app.emit_to("settings", "tray:history-cleared", ());
                 }
                 "quit" => {
                     app.exit(0);
