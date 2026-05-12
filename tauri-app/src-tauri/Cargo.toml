@@ -58,6 +58,7 @@ once_cell = "1"
 # Font rasterization (Windows overlay text)
 fontdue = "0.9"
 tauri-plugin-autostart = "2.5.1"
+tauri-plugin-dialog = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
