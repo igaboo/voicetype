@@ -426,28 +426,27 @@ impl Orchestrator {
     }
 
     pub fn on_hotkey_permission_required(&self, hotkey_label: String) {
-        let mut inner = self.inner.lock().unwrap();
-        log::info(&format!(
-            "Accessibility permission required for hotkey: {hotkey_label}"
-        ));
-        inner.state = AppState::Idle;
-        inner.hold_confirm_start = None;
-        inner.permission_prompt = Some(PermissionPromptKind::Accessibility);
-        inner.emit_state();
-        inner.emit_permission_prompt();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            log::info(&format!(
+                "Accessibility permission required for hotkey: {hotkey_label}"
+            ));
+            inner.state = AppState::Idle;
+            inner.hold_confirm_start = None;
+            inner.permission_prompt = Some(PermissionPromptKind::Accessibility);
+            inner.emit_state();
+            inner.emit_permission_prompt();
+        }
+
+        #[cfg(target_os = "macos")]
+        self.ensure_permission_polling(PermissionPromptKind::Accessibility);
     }
 
     #[cfg(target_os = "macos")]
     pub fn on_permission_action(&self) {
-        let prompt = {
-            let mut inner = self.inner.lock().unwrap();
-            match inner.permission_prompt {
-                Some(prompt) if !inner.permission_poll_pending => {
-                    inner.permission_poll_pending = true;
-                    prompt
-                }
-                _ => return,
-            }
+        let prompt = match self.inner.lock().unwrap().permission_prompt {
+            Some(prompt) => prompt,
+            None => return,
         };
 
         match prompt {
@@ -458,27 +457,47 @@ impl Orchestrator {
                     return;
                 }
 
-                let app = self.app_handle();
-                let orch = app.state::<Arc<Orchestrator>>();
-                let orch = Arc::clone(&orch);
-                std::thread::Builder::new()
-                    .name("yap-accessibility-permission-wait".into())
-                    .spawn(move || {
-                        for _ in 0..120 {
-                            if hotkey::has_accessibility_permission() {
-                                orch.finish_permission_granted(prompt);
-                                return;
-                            }
-                            std::thread::sleep(std::time::Duration::from_secs(1));
-                        }
-
-                        let mut inner = orch.inner.lock().unwrap();
-                        inner.permission_poll_pending = false;
-                        inner.emit_permission_prompt();
-                    })
-                    .ok();
+                self.ensure_permission_polling(prompt);
             }
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn ensure_permission_polling(&self, prompt: PermissionPromptKind) {
+        let should_spawn = {
+            let mut inner = self.inner.lock().unwrap();
+            match inner.permission_prompt {
+                Some(current) if current == prompt && !inner.permission_poll_pending => {
+                    inner.permission_poll_pending = true;
+                    true
+                }
+                _ => false,
+            }
+        };
+
+        if !should_spawn {
+            return;
+        }
+
+        let app = self.app_handle();
+        let orch = app.state::<Arc<Orchestrator>>();
+        let orch = Arc::clone(&orch);
+        std::thread::Builder::new()
+            .name("yap-accessibility-permission-wait".into())
+            .spawn(move || {
+                for _ in 0..120 {
+                    if hotkey::has_accessibility_permission() {
+                        orch.finish_permission_granted(prompt);
+                        return;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                }
+
+                let mut inner = orch.inner.lock().unwrap();
+                inner.permission_poll_pending = false;
+                inner.emit_permission_prompt();
+            })
+            .ok();
     }
 
     #[cfg(target_os = "macos")]
