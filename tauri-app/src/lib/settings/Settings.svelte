@@ -429,12 +429,7 @@
 
   function selectSection(section: SectionId) {
     if (capturingHotkey) {
-      hotkeyPreview = '';
-      resetWebHotkeyCapture();
-      capturingHotkey = false;
-      if (isTauriRuntime) {
-        void invoke('cancel_hotkey_capture');
-      }
+      cancelHotkeyCapture();
     }
     activeSection = section;
     if (section === 'history') {
@@ -459,6 +454,11 @@
   }
 
   function setCapturedHotkey(value: string) {
+    if (shortcutIncludesEscape(value)) {
+      cancelHotkeyCapture();
+      return;
+    }
+
     hotkey = value;
     hotkeyPreview = '';
     resetWebHotkeyCapture();
@@ -468,6 +468,19 @@
     }
   }
 
+  function cancelHotkeyCapture() {
+    hotkeyPreview = '';
+    resetWebHotkeyCapture();
+    capturingHotkey = false;
+    if (isTauriRuntime) {
+      void invoke('cancel_hotkey_capture');
+    }
+  }
+
+  function shortcutIncludesEscape(value: string): boolean {
+    return value.split('+').filter(Boolean).includes('escape');
+  }
+
   // ── Keyboard ──────────────────────────────────────────────────────────
 
   function onKeyDown(e: KeyboardEvent) {
@@ -475,20 +488,8 @@
       e.preventDefault();
       e.stopPropagation();
 
-      if (
-        e.key === 'Escape'
-        && !e.metaKey
-        && !e.ctrlKey
-        && !e.altKey
-        && !e.shiftKey
-        && webPressedHotkeyParts.length === 0
-      ) {
-        hotkeyPreview = '';
-        resetWebHotkeyCapture();
-        capturingHotkey = false;
-        if (isTauriRuntime) {
-          void invoke('cancel_hotkey_capture');
-        }
+      if (e.key === 'Escape') {
+        cancelHotkeyCapture();
         return;
       }
 
@@ -842,6 +843,10 @@
     getCurrentWindow()
       .listen<string>('settings:hotkey-preview', ({ payload }) => {
         if (capturingHotkey) {
+          if (shortcutIncludesEscape(payload)) {
+            cancelHotkeyCapture();
+            return;
+          }
           hotkeyPreview = payload;
         }
       })
@@ -942,11 +947,6 @@
               <div class="field-row hotkey-field">
                 <div class="field-copy">
                   <span class="field-label">Hotkey</span>
-                  <span class="field-description">
-                    {isWindows
-                      ? 'Press the exact key or combination. Fn works only on keyboards that expose it to Windows.'
-                      : 'Press the exact key or combination. Fn/Globe is captured natively.'}
-                  </span>
                 </div>
                 <button
                   class="hotkey-button"
@@ -981,6 +981,7 @@
                     <span class="sr-only">{hotkeyDisplayLabel(hotkey)}</span>
                   {/if}
                 </button>
+                <span class="field-description">Press the exact key or combination.</span>
               </div>
 
               <div class="field-row">
@@ -1009,6 +1010,13 @@
                     <option value={p.value} disabled={p.disabled}>{p.label}</option>
                   {/each}
                 </select>
+                {#if !hasTxProvider}
+                  <span class="field-description">
+                    {isWindows
+                      ? 'Choose an API provider and enter your key to enable transcription.'
+                      : 'Uses macOS on-device speech recognition. Choose an API provider only if you want cloud transcription.'}
+                  </span>
+                {/if}
               </div>
 
               <div class="field-row">
@@ -1133,11 +1141,6 @@
 
               {/if}
             </div>
-            {#if !hasTxProvider}
-              <div class="section-footer">
-                Select a provider and enter your API key to enable transcription.
-              </div>
-            {/if}
           </section>
         {/if}
 
@@ -1151,6 +1154,9 @@
                     <option value={p.value}>{p.label}</option>
                   {/each}
                 </select>
+                {#if !hasFmtProvider}
+                  <span class="field-description">Raw transcription will be pasted as-is.</span>
+                {/if}
               </div>
 
               {#if hasFmtProvider}
@@ -1248,11 +1254,6 @@
                 </div>
               {/if}
             </div>
-            {#if !hasFmtProvider}
-              <div class="section-footer">
-                No formatting -- raw transcription will be pasted as-is.
-              </div>
-            {/if}
           </section>
         {/if}
 
@@ -1276,6 +1277,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Sound effects</span>
+                  <span class="toggle-description">Play cues for recording, completion, and errors</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={soundsEnabled} />
@@ -1303,6 +1305,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Gradient background</span>
+                  <span class="toggle-description">Show the animated gradient in the overlay pill</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={gradientEnabled} />

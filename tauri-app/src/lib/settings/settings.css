@@ -643,10 +643,6 @@ button {
   background: var(--settings-surface);
 }
 
-.settings-history-entry:hover {
-  background: var(--settings-surface-hover);
-}
-
 .history-entry-copy {
   display: flex;
   flex: 1;
