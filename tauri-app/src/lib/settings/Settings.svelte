@@ -2,13 +2,14 @@
   /**
    * Full settings UI for the Yap Tauri app.
    *
-   * Sections: General, Transcription, Formatting, Appearance, History, Advanced
+   * Sections: General, Transcription, Formatting, Behavior, History, Advanced
    * Loads/saves config via Tauri invoke commands.
    * Dark theme matching the overlay pill aesthetic.
    */
 
   import './settings.css';
   import { invoke } from '@tauri-apps/api/core';
+  import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onDestroy } from 'svelte';
 
@@ -44,6 +45,7 @@
   // ── Provider Metadata ─────────────────────────────────────────────────
 
   const isWindows = navigator.userAgent.toLowerCase().includes('windows');
+  const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const defaultHotkey = isWindows ? 'ctrl+space' : 'fn';
   const defaultTxProvider = isWindows ? 'openai' : 'none';
 
@@ -100,10 +102,22 @@
   const styleExampleInput = 'yeah i was thinking we could try that new place on friday if youre free';
   const modifierOrder = ['cmd', 'ctrl', 'option', 'shift', 'fn'];
 
+  type SectionId = 'general' | 'transcription' | 'formatting' | 'behavior' | 'history' | 'advanced';
+
+  const settingsSections: Array<{ id: SectionId; label: string; description: string }> = [
+    { id: 'general', label: 'General', description: 'Shortcut and microphone' },
+    { id: 'transcription', label: 'Transcription', description: 'Provider, model, and accuracy' },
+    { id: 'formatting', label: 'Formatting', description: 'Cleanup provider and style' },
+    { id: 'behavior', label: 'Behavior', description: 'Paste, audio, and launch' },
+    { id: 'history', label: 'History', description: 'Saved transcripts' },
+    { id: 'advanced', label: 'Advanced', description: 'Locale and onboarding' },
+  ];
+
   // ── State ─────────────────────────────────────────────────────────────
 
   let loading = $state(true);
-  let saving = $state(false);
+  let activeSection = $state<SectionId>('general');
+  let configReady = $state(false);
 
   // General
   let hotkey = $state(defaultHotkey);
@@ -138,7 +152,7 @@
   let fmtUseSameKey = $state(true);
   let showFmtApiKey = $state(false);
 
-  // Appearance
+  // Behavior
   let soundsEnabled = $state(true);
   let quietAudioWhileRecording = $state(true);
   let gradientEnabled = $state(true);
@@ -147,6 +161,8 @@
 
   // Load + sync autostart state with the OS
   async function loadAutostart() {
+    if (!isTauriRuntime) return;
+
     try {
       const { isEnabled } = await import('@tauri-apps/plugin-autostart');
       startWithSystem = await isEnabled();
@@ -157,6 +173,8 @@
   loadAutostart();
 
   async function toggleAutostart(enabled: boolean) {
+    if (!isTauriRuntime) return;
+
     try {
       const { enable, disable } = await import('@tauri-apps/plugin-autostart');
       if (enabled) { await enable(); } else { await disable(); }
@@ -195,6 +213,13 @@
   // ── Load Config ───────────────────────────────────────────────────────
 
   async function loadConfig() {
+    if (!isTauriRuntime) {
+      loading = false;
+      configReady = true;
+      return;
+    }
+
+    configReady = false;
     try {
       const cfg = await invoke<AppConfig>('get_config');
       hotkey = cfg.hotkey;
@@ -239,55 +264,124 @@
     }
 
     loading = false;
+    configReady = true;
   }
 
   // ── Save Config ───────────────────────────────────────────────────────
 
-  async function saveConfig() {
-    saving = true;
-    try {
-      const cfg: AppConfig = {
-        hotkey,
-        audioDevice: selectedMic,
-        pressEnterAfterPaste,
-        txProvider,
-        txApiKey,
-        txModel,
-        fmtProvider,
-        fmtApiKey: fmtUseSameKey && canShareApiKey ? '' : fmtApiKey,
-        fmtModel,
-        fmtStyle,
-        onboardingComplete,
-        dgSmartFormat,
-        dgKeywords,
-        dgLanguage,
-        oaiLanguage,
-        oaiPrompt,
-        geminiTemperature,
-        elLanguageCode,
-        soundsEnabled,
-        quietAudioWhileRecording,
-        gradientEnabled,
-        alwaysVisiblePill,
-        historyEnabled,
-        speechLocale,
-      };
+  function currentConfig(): AppConfig {
+    return {
+      hotkey,
+      audioDevice: selectedMic,
+      pressEnterAfterPaste,
+      txProvider,
+      txApiKey,
+      txModel,
+      fmtProvider,
+      fmtApiKey: fmtUseSameKey && canShareApiKey ? '' : fmtApiKey,
+      fmtModel,
+      fmtStyle,
+      onboardingComplete,
+      dgSmartFormat,
+      dgKeywords,
+      dgLanguage,
+      oaiLanguage,
+      oaiPrompt,
+      geminiTemperature,
+      elLanguageCode,
+      soundsEnabled,
+      quietAudioWhileRecording,
+      gradientEnabled,
+      alwaysVisiblePill,
+      historyEnabled,
+      speechLocale,
+    };
+  }
 
-      await invoke('save_config', { cfg });
-      closeWindow();
+  async function persistConfig() {
+    if (!isTauriRuntime) return;
+
+    try {
+      await invoke('save_config', { cfg: currentConfig() });
     } catch (e) {
       console.error('Failed to save config:', e);
     }
-    saving = false;
   }
+
+  let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function scheduleSave() {
+    if (!isTauriRuntime || !configReady || loading) return;
+    if (saveTimer) clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      void persistConfig();
+    }, 300);
+  }
+
+  $effect(() => {
+    hotkey;
+    selectedMic;
+    pressEnterAfterPaste;
+    txProvider;
+    txApiKey;
+    txModel;
+    fmtProvider;
+    fmtApiKey;
+    fmtModel;
+    fmtStyle;
+    onboardingComplete;
+    dgSmartFormat;
+    dgKeywords;
+    dgLanguage;
+    oaiLanguage;
+    oaiPrompt;
+    geminiTemperature;
+    elLanguageCode;
+    soundsEnabled;
+    quietAudioWhileRecording;
+    gradientEnabled;
+    alwaysVisiblePill;
+    historyEnabled;
+    speechLocale;
+    fmtUseSameKey;
+
+    scheduleSave();
+  });
 
   // ── Close Window ──────────────────────────────────────────────────────
 
   async function closeWindow() {
     if (capturingHotkey) {
-      await invoke('cancel_hotkey_capture');
+      if (isTauriRuntime) {
+        await invoke('cancel_hotkey_capture');
+      }
     }
-    await invoke('hide_app_window', { label: 'settings' });
+    if (isTauriRuntime) {
+      await invoke('hide_app_window', { label: 'settings' });
+    }
+  }
+
+  async function startWindowDrag(e: MouseEvent) {
+    if (!isTauriRuntime || e.button !== 0) return;
+    e.preventDefault();
+
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error('Failed to start window drag:', error);
+    }
+  }
+
+  function selectSection(section: SectionId) {
+    if (capturingHotkey) {
+      hotkeyPreview = '';
+      resetWebHotkeyCapture();
+      capturingHotkey = false;
+      if (isTauriRuntime) {
+        void invoke('cancel_hotkey_capture');
+      }
+    }
+    activeSection = section;
   }
 
   async function toggleHotkeyCapture() {
@@ -296,9 +390,13 @@
     capturingHotkey = !capturingHotkey;
 
     if (capturingHotkey) {
-      await invoke('start_hotkey_capture');
+      if (isTauriRuntime) {
+        await invoke('start_hotkey_capture');
+      }
     } else {
-      await invoke('cancel_hotkey_capture');
+      if (isTauriRuntime) {
+        await invoke('cancel_hotkey_capture');
+      }
     }
   }
 
@@ -307,7 +405,9 @@
     hotkeyPreview = '';
     resetWebHotkeyCapture();
     capturingHotkey = false;
-    void invoke('cancel_hotkey_capture');
+    if (isTauriRuntime) {
+      void invoke('cancel_hotkey_capture');
+    }
   }
 
   // ── Keyboard ──────────────────────────────────────────────────────────
@@ -328,7 +428,9 @@
         hotkeyPreview = '';
         resetWebHotkeyCapture();
         capturingHotkey = false;
-        void invoke('cancel_hotkey_capture');
+        if (isTauriRuntime) {
+          void invoke('cancel_hotkey_capture');
+        }
         return;
       }
 
@@ -346,8 +448,6 @@
 
     if (e.key === 'Escape') {
       closeWindow();
-    } else if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-      saveConfig();
     }
   }
 
@@ -482,8 +582,28 @@
 
   // ── Reset Onboarding ─────────────────────────────────────────────────
 
+  async function confirmReset(message: string): Promise<boolean> {
+    if (!isTauriRuntime) {
+      return window.confirm(message);
+    }
+
+    return confirmDialog(message, {
+      title: 'Yap',
+      kind: 'warning',
+      okLabel: 'Reset',
+      cancelLabel: 'Cancel',
+    });
+  }
+
   async function resetOnboarding() {
+    const confirmed = await confirmReset(
+      'Reset onboarding? Yap will show setup prompts again the next time they are needed.'
+    );
+    if (!confirmed) return;
+
     onboardingComplete = false;
+    if (!isTauriRuntime) return;
+
     try {
       await invoke('reset_onboarding');
     } catch (e) {
@@ -491,7 +611,12 @@
     }
   }
 
-  function resetDefaults() {
+  async function resetDefaults() {
+    const confirmed = await confirmReset(
+      'Reset settings to defaults? This will restore every setting in this window and turn off Start with system.'
+    );
+    if (!confirmed) return;
+
     hotkey = defaultHotkey;
     selectedMic = '';
     pressEnterAfterPaste = false;
@@ -511,12 +636,14 @@
     geminiTemperature = 0;
     elLanguageCode = '';
     soundsEnabled = true;
+    quietAudioWhileRecording = true;
     gradientEnabled = true;
     alwaysVisiblePill = true;
     startWithSystem = false;
     void toggleAutostart(false);
     historyEnabled = true;
     speechLocale = '';
+    void persistConfig();
   }
 
   // ── Init ──────────────────────────────────────────────────────────────
@@ -531,536 +658,565 @@
   let unlistenHotkeyPreview: (() => void) | undefined;
   let unlistenHotkeyCapture: (() => void) | undefined;
 
-  getCurrentWindow()
-    .onFocusChanged(({ payload: focused }) => {
-      if (focused) {
-        loading = true;
-        loadConfig();
-      }
-    })
-    .then((fn) => {
-      unlistenFocus = fn;
-    });
+  if (isTauriRuntime) {
+    getCurrentWindow()
+      .onFocusChanged(({ payload: focused }) => {
+        if (focused) {
+          loading = true;
+          loadConfig();
+        }
+      })
+      .then((fn) => {
+        unlistenFocus = fn;
+      });
 
-  getCurrentWindow()
-    .listen<string>('settings:hotkey-preview', ({ payload }) => {
-      if (capturingHotkey) {
-        hotkeyPreview = payload;
-      }
-    })
-    .then((fn) => {
-      unlistenHotkeyPreview = fn;
-    });
+    getCurrentWindow()
+      .listen<string>('settings:hotkey-preview', ({ payload }) => {
+        if (capturingHotkey) {
+          hotkeyPreview = payload;
+        }
+      })
+      .then((fn) => {
+        unlistenHotkeyPreview = fn;
+      });
 
-  getCurrentWindow()
-    .listen<string>('settings:hotkey-captured', ({ payload }) => {
-      setCapturedHotkey(payload);
-    })
-    .then((fn) => {
-      unlistenHotkeyCapture = fn;
-    });
+    getCurrentWindow()
+      .listen<string>('settings:hotkey-captured', ({ payload }) => {
+        setCapturedHotkey(payload);
+      })
+      .then((fn) => {
+        unlistenHotkeyCapture = fn;
+      });
+  }
 
   onDestroy(() => {
     unlistenFocus?.();
     unlistenHotkeyPreview?.();
     unlistenHotkeyCapture?.();
-    void invoke('cancel_hotkey_capture');
+    if (saveTimer) clearTimeout(saveTimer);
+    if (isTauriRuntime) {
+      void invoke('cancel_hotkey_capture');
+    }
   });
 </script>
 
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
 
 {#if loading}
-  <div class="settings-container" style="align-items: center; justify-content: center;">
-    <span style="color: var(--settings-text-muted); font-size: 13px;">Loading...</span>
+  <div class="settings-container loading-state">
+    <span>Loading...</span>
   </div>
 {:else}
   <div class="settings-container">
-    <!-- Scrollable Content -->
-    <div class="settings-scroll">
-
-      <!-- ── General ──────────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">General</div>
-        <div class="section-body">
-          <!-- Hotkey -->
-          <div class="field-row">
-            <span class="field-label">Hotkey</span>
-            <button
-              class="hotkey-button"
-              class:capturing={capturingHotkey}
-              onclick={toggleHotkeyCapture}
-            >
-              {#if capturingHotkey}
-                {hotkeyPreview ? hotkeyDisplayLabel(hotkeyPreview) : 'Press shortcut...'}
-              {:else}
-                {hotkeyDisplayLabel(hotkey)}
-              {/if}
-            </button>
-            <span class="field-description">
-              {isWindows
-                ? 'Press the exact key or combination. Fn works only on keyboards that expose it to Windows.'
-                : 'Press the exact key or combination. Fn/Globe is captured natively.'}
-            </span>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Press Enter after paste</span>
-              <span class="toggle-description">Send Return after Yap inserts the transcription</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={pressEnterAfterPaste} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <!-- Microphone -->
-          <div class="field-row">
-            <span class="field-label">Microphone</span>
-            <select class="select" bind:value={selectedMic}>
-              <option value="">System Default</option>
-              {#each microphones as mic}
-                <option value={mic}>{mic}</option>
-              {/each}
-              {#if microphones.length === 0}
-                <option value="">No devices found</option>
-              {/if}
-            </select>
-          </div>
+    <div
+      class="settings-drag-region"
+      data-tauri-drag-region
+      aria-hidden="true"
+      onmousedown={startWindowDrag}
+    ></div>
+    <aside class="settings-sidebar" aria-label="Settings sections">
+      <div class="sidebar-header">
+        <img class="app-icon" src="/favicon.png" alt="" aria-hidden="true" />
+        <div>
+          <div class="sidebar-title">Yap</div>
+          <div class="sidebar-subtitle">Settings</div>
         </div>
       </div>
 
-      <!-- ── Transcription ────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">Transcription</div>
-        <div class="section-body">
-          <!-- Provider -->
-          <div class="field-row">
-            <span class="field-label">Provider</span>
-            <select class="select" bind:value={txProvider}>
-              {#each txProviders as p}
-                <option value={p.value} disabled={p.disabled}>{p.label}</option>
-              {/each}
-            </select>
-          </div>
+      <nav class="section-nav">
+        {#each settingsSections as section}
+          <button
+            class="section-nav-item"
+            class:active={activeSection === section.id}
+            type="button"
+            aria-current={activeSection === section.id ? 'page' : undefined}
+            aria-controls={'settings-panel-' + section.id}
+            onclick={() => selectSection(section.id)}
+          >
+            <span class="section-nav-label">{section.label}</span>
+            <span class="section-nav-description">{section.description}</span>
+          </button>
+        {/each}
+      </nav>
 
-          {#if hasTxProvider}
-            <div class="field-divider"></div>
+    </aside>
 
-            <!-- API Key -->
-            <div class="field-row">
-              <span class="field-label">API Key</span>
-              <div class="password-wrapper">
-                <input
-                  class="input"
-                  type={showTxApiKey ? 'text' : 'password'}
-                  placeholder="Required"
-                  bind:value={txApiKey}
-                  autocomplete="off"
-                />
+    <div class="settings-main">
+      <main class="settings-content" id={'settings-panel-' + activeSection}>
+        {#if activeSection === 'general'}
+          <section class="settings-section" aria-label="General settings">
+            <div class="section-body">
+              <div class="field-row split">
+                <div class="field-copy">
+                  <span class="field-label">Hotkey</span>
+                  <span class="field-description">
+                    {isWindows
+                      ? 'Press the exact key or combination. Fn works only on keyboards that expose it to Windows.'
+                      : 'Press the exact key or combination. Fn/Globe is captured natively.'}
+                  </span>
+                </div>
                 <button
-                  class="password-toggle"
-                  onclick={() => { showTxApiKey = !showTxApiKey; }}
-                  aria-label={showTxApiKey ? 'Hide API key' : 'Show API key'}
+                  class="hotkey-button"
+                  class:capturing={capturingHotkey}
+                  onclick={toggleHotkeyCapture}
                   type="button"
                 >
-                  {#if showTxApiKey}
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                      <circle cx="8" cy="8" r="2"/>
-                    </svg>
+                  {#if capturingHotkey}
+                    {hotkeyPreview ? hotkeyDisplayLabel(hotkeyPreview) : 'Press shortcut...'}
                   {:else}
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                      <circle cx="8" cy="8" r="2"/>
-                      <line x1="2" y1="14" x2="14" y2="2"/>
-                    </svg>
+                    {hotkeyDisplayLabel(hotkey)}
                   {/if}
                 </button>
               </div>
+
+              <div class="field-row">
+                <span class="field-label">Microphone</span>
+                <select class="select" bind:value={selectedMic}>
+                  <option value="">System Default</option>
+                  {#each microphones as mic}
+                    <option value={mic}>{mic}</option>
+                  {/each}
+                  {#if microphones.length === 0}
+                    <option value="">No devices found</option>
+                  {/if}
+                </select>
+              </div>
             </div>
+          </section>
+        {/if}
 
-            <!-- Model -->
-            <div class="field-row">
-              <span class="field-label">Model</span>
-              <input
-                class="input"
-                type="text"
-                placeholder={txDefaultModels[txProvider] ?? ''}
-                bind:value={txModel}
-              />
-              <span class="field-description">
-                Leave empty to use the default ({txDefaultModels[txProvider] ?? 'none'}).
-              </span>
+        {#if activeSection === 'transcription'}
+          <section class="settings-section" aria-label="Transcription settings">
+            <div class="section-body">
+              <div class="field-row">
+                <span class="field-label">Provider</span>
+                <select class="select" bind:value={txProvider}>
+                  {#each txProviders as p}
+                    <option value={p.value} disabled={p.disabled}>{p.label}</option>
+                  {/each}
+                </select>
+              </div>
+
+              {#if hasTxProvider}
+                <div class="field-divider"></div>
+
+                <div class="field-row">
+                  <span class="field-label">API Key</span>
+                  <div class="password-wrapper">
+                    <input
+                      class="input"
+                      type={showTxApiKey ? 'text' : 'password'}
+                      placeholder="Required"
+                      bind:value={txApiKey}
+                      autocomplete="off"
+                    />
+                    <button
+                      class="password-toggle"
+                      onclick={() => { showTxApiKey = !showTxApiKey; }}
+                      aria-label={showTxApiKey ? 'Hide API key' : 'Show API key'}
+                      type="button"
+                    >
+                      {#if showTxApiKey}
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                          <circle cx="8" cy="8" r="2"/>
+                        </svg>
+                      {:else}
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                          <circle cx="8" cy="8" r="2"/>
+                          <line x1="2" y1="14" x2="14" y2="2"/>
+                        </svg>
+                      {/if}
+                    </button>
+                  </div>
+                </div>
+
+                <div class="field-row">
+                  <span class="field-label">Model</span>
+                  <input
+                    class="input"
+                    type="text"
+                    placeholder={txDefaultModels[txProvider] ?? ''}
+                    bind:value={txModel}
+                  />
+                  <span class="field-description">
+                    Leave empty to use the default ({txDefaultModels[txProvider] ?? 'none'}).
+                  </span>
+                </div>
+
+                {#if txProvider === 'deepgram'}
+                  <div class="field-divider"></div>
+
+                  <div class="toggle-row">
+                    <div class="toggle-info">
+                      <span class="toggle-label">Smart Format</span>
+                      <span class="toggle-description">Auto-formats numbers, dates, currencies, and adds punctuation</span>
+                    </div>
+                    <label class="toggle-switch">
+                      <input type="checkbox" bind:checked={dgSmartFormat} />
+                      <span class="toggle-track"></span>
+                      <span class="toggle-thumb"></span>
+                    </label>
+                  </div>
+
+                  <div class="field-row">
+                    <span class="field-label">Language</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="Auto-detect"
+                      bind:value={dgLanguage}
+                    />
+                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr, ja). Leave empty to auto-detect.</span>
+                  </div>
+
+                  <div class="field-row">
+                    <span class="field-label">Keywords</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="e.g. Kubernetes, Jira, OAuth"
+                      bind:value={dgKeywords}
+                    />
+                    <span class="field-description">Boost recognition of specific words or names, separated by commas.</span>
+                  </div>
+                {/if}
+
+                {#if txProvider === 'openai'}
+                  <div class="field-divider"></div>
+
+                  <div class="field-row">
+                    <span class="field-label">Language</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="Auto-detect"
+                      bind:value={oaiLanguage}
+                    />
+                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Improves accuracy and speed.</span>
+                  </div>
+
+                  <div class="field-row">
+                    <span class="field-label">Prompt</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="e.g. The speaker discusses SwiftUI and Xcode"
+                      bind:value={oaiPrompt}
+                    />
+                    <span class="field-description">Guide the model with context -- useful for domain-specific terms, names, or jargon it might mishear.</span>
+                  </div>
+                {/if}
+
+                {#if txProvider === 'gemini'}
+                  <div class="field-divider"></div>
+
+                  <div class="field-row">
+                    <span class="field-label">Temperature</span>
+                    <div class="slider-row">
+                      <input
+                        class="slider-input"
+                        type="range"
+                        min="0"
+                        max="1"
+                        step="0.1"
+                        bind:value={geminiTemperature}
+                      />
+                      <span class="slider-value">{geminiTemperature.toFixed(1)}</span>
+                    </div>
+                    <span class="field-description">Controls randomness. 0 = precise and deterministic, 1 = creative and varied. Lower is better for transcription.</span>
+                  </div>
+                {/if}
+
+                {#if txProvider === 'elevenlabs'}
+                  <div class="field-divider"></div>
+
+                  <div class="field-row">
+                    <span class="field-label">Language Code</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder="Auto-detect"
+                      bind:value={elLanguageCode}
+                    />
+                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Leave empty to auto-detect.</span>
+                  </div>
+                {/if}
+              {/if}
             </div>
+            {#if !hasTxProvider}
+              <div class="section-footer">
+                Select a provider and enter your API key to enable transcription.
+              </div>
+            {/if}
+          </section>
+        {/if}
 
-            <!-- Provider-specific options -->
-            {#if txProvider === 'deepgram'}
-              <div class="field-divider"></div>
+        {#if activeSection === 'formatting'}
+          <section class="settings-section" aria-label="Formatting settings">
+            <div class="section-body">
+              <div class="field-row">
+                <span class="field-label">Provider</span>
+                <select class="select" bind:value={fmtProvider}>
+                  {#each fmtProviders as p}
+                    <option value={p.value}>{p.label}</option>
+                  {/each}
+                </select>
+              </div>
 
+              {#if hasFmtProvider}
+                <div class="field-divider"></div>
+
+                <div class="field-row">
+                  <span class="field-label">API Key</span>
+                  <div class="password-wrapper">
+                    <input
+                      class="input"
+                      type={showFmtApiKey ? 'text' : 'password'}
+                      placeholder="Required"
+                      value={effectiveFmtApiKey}
+                      oninput={(e: Event) => { fmtApiKey = (e.target as HTMLInputElement).value; }}
+                      disabled={fmtUseSameKey && canShareApiKey}
+                      autocomplete="off"
+                    />
+                    <button
+                      class="password-toggle"
+                      onclick={() => { showFmtApiKey = !showFmtApiKey; }}
+                      aria-label={showFmtApiKey ? 'Hide API key' : 'Show API key'}
+                      type="button"
+                    >
+                      {#if showFmtApiKey}
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                          <circle cx="8" cy="8" r="2"/>
+                        </svg>
+                      {:else}
+                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                          <circle cx="8" cy="8" r="2"/>
+                          <line x1="2" y1="14" x2="14" y2="2"/>
+                        </svg>
+                      {/if}
+                    </button>
+                  </div>
+                  {#if canShareApiKey}
+                    <label class="checkbox-row">
+                      <input type="checkbox" bind:checked={fmtUseSameKey} />
+                      <span class="checkbox-label">Use same API key as transcription</span>
+                    </label>
+                  {/if}
+                </div>
+
+                <div class="field-row">
+                  <span class="field-label">Model</span>
+                  <input
+                    class="input"
+                    type="text"
+                    placeholder={fmtDefaultModels[fmtProvider] ?? ''}
+                    bind:value={fmtModel}
+                  />
+                  <span class="field-description">
+                    Leave empty to use the default ({fmtDefaultModels[fmtProvider] ?? 'none'}).
+                  </span>
+                </div>
+
+                <div class="field-divider"></div>
+
+                <div class="field-row">
+                  <span class="field-label">Style</span>
+                  <div class="style-picker">
+                    {#each Object.entries(styleData) as [value, data]}
+                      <div class="style-option">
+                        <input
+                          type="radio"
+                          name="fmtStyle"
+                          id="style-{value}"
+                          {value}
+                          checked={fmtStyle === value}
+                          onchange={() => { fmtStyle = value; }}
+                        />
+                        <label for="style-{value}">{data.label}</label>
+                      </div>
+                    {/each}
+                  </div>
+                </div>
+
+                <div class="style-preview">
+                  <div class="style-preview-header">
+                    <div class="style-preview-title">{currentStyleData.label}</div>
+                    <div class="style-preview-desc">{currentStyleData.description}</div>
+                  </div>
+                  <div class="style-preview-body">
+                    <div class="style-preview-col">
+                      <div class="style-preview-label before">Before</div>
+                      <div class="style-preview-text">{styleExampleInput}</div>
+                    </div>
+                    <div class="style-preview-col">
+                      <div class="style-preview-label after">After</div>
+                      <div class="style-preview-text">{currentStyleData.example}</div>
+                    </div>
+                  </div>
+                </div>
+              {/if}
+            </div>
+            {#if !hasFmtProvider}
+              <div class="section-footer">
+                No formatting -- raw transcription will be pasted as-is.
+              </div>
+            {/if}
+          </section>
+        {/if}
+
+        {#if activeSection === 'behavior'}
+          <section class="settings-section" aria-label="Behavior settings">
+            <div class="section-body">
               <div class="toggle-row">
                 <div class="toggle-info">
-                  <span class="toggle-label">Smart Format</span>
-                  <span class="toggle-description">Auto-formats numbers, dates, currencies, and adds punctuation</span>
+                  <span class="toggle-label">Press Enter after paste</span>
+                  <span class="toggle-description">Send Return after Yap inserts the transcription</span>
                 </div>
                 <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={dgSmartFormat} />
+                  <input type="checkbox" bind:checked={pressEnterAfterPaste} />
                   <span class="toggle-track"></span>
                   <span class="toggle-thumb"></span>
                 </label>
               </div>
 
-              <div class="field-row">
-                <span class="field-label">Language</span>
-                <input
-                  class="input"
-                  type="text"
-                  placeholder="Auto-detect"
-                  bind:value={dgLanguage}
-                />
-                <span class="field-description">ISO 639-1 language code (e.g. en, es, fr, ja). Leave empty to auto-detect.</span>
-              </div>
-
-              <div class="field-row">
-                <span class="field-label">Keywords</span>
-                <input
-                  class="input"
-                  type="text"
-                  placeholder="e.g. Kubernetes, Jira, OAuth"
-                  bind:value={dgKeywords}
-                />
-                <span class="field-description">Boost recognition of specific words or names, separated by commas.</span>
-              </div>
-            {/if}
-
-            {#if txProvider === 'openai'}
               <div class="field-divider"></div>
 
-              <div class="field-row">
-                <span class="field-label">Language</span>
-                <input
-                  class="input"
-                  type="text"
-                  placeholder="Auto-detect"
-                  bind:value={oaiLanguage}
-                />
-                <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Improves accuracy and speed.</span>
-              </div>
-
-              <div class="field-row">
-                <span class="field-label">Prompt</span>
-                <input
-                  class="input"
-                  type="text"
-                  placeholder="e.g. The speaker discusses SwiftUI and Xcode"
-                  bind:value={oaiPrompt}
-                />
-                <span class="field-description">Guide the model with context -- useful for domain-specific terms, names, or jargon it might mishear.</span>
-              </div>
-            {/if}
-
-            {#if txProvider === 'gemini'}
-              <div class="field-divider"></div>
-
-              <div class="field-row">
-                <span class="field-label">Temperature</span>
-                <div class="slider-row">
-                  <input
-                    class="slider-input"
-                    type="range"
-                    min="0"
-                    max="1"
-                    step="0.1"
-                    bind:value={geminiTemperature}
-                  />
-                  <span class="slider-value">{geminiTemperature.toFixed(1)}</span>
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Sound effects</span>
                 </div>
-                <span class="field-description">Controls randomness. 0 = precise and deterministic, 1 = creative and varied. Lower is better for transcription.</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={soundsEnabled} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
               </div>
-            {/if}
 
-            {#if txProvider === 'elevenlabs'}
               <div class="field-divider"></div>
 
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Quiet background audio</span>
+                  <span class="toggle-description">Reduce or mute other app audio while recording</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={quietAudioWhileRecording} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Gradient background</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={gradientEnabled} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Always-visible pill</span>
+                  <span class="toggle-description">Keep the overlay pill visible even when idle</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={alwaysVisiblePill} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Start with system</span>
+                  <span class="toggle-description">Launch Yap automatically when you log in</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={startWithSystem} onchange={() => { void toggleAutostart(startWithSystem); }} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+            </div>
+          </section>
+        {/if}
+
+        {#if activeSection === 'history'}
+          <section class="settings-section" aria-label="History settings">
+            <div class="section-body">
+              <div class="toggle-row">
+                <div class="toggle-info">
+                  <span class="toggle-label">Save transcription history</span>
+                </div>
+                <label class="toggle-switch">
+                  <input type="checkbox" bind:checked={historyEnabled} />
+                  <span class="toggle-track"></span>
+                  <span class="toggle-thumb"></span>
+                </label>
+              </div>
+            </div>
+            {#if !historyEnabled}
+              <div class="section-footer">
+                Transcriptions will not be saved to disk.
+              </div>
+            {/if}
+          </section>
+        {/if}
+
+        {#if activeSection === 'advanced'}
+          <section class="settings-section" aria-label="Advanced settings">
+            <div class="section-body">
               <div class="field-row">
-                <span class="field-label">Language Code</span>
+                <span class="field-label">Speech recognition locale</span>
                 <input
                   class="input"
                   type="text"
-                  placeholder="Auto-detect"
-                  bind:value={elLanguageCode}
+                  placeholder="en-US"
+                  bind:value={speechLocale}
                 />
-                <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Leave empty to auto-detect.</span>
+                <span class="field-description">BCP 47 locale for on-device speech recognition (e.g. en-US, ja-JP, fr-FR).</span>
               </div>
-            {/if}
-          {/if}
-        </div>
-        {#if !hasTxProvider}
-          <div class="section-footer">
-            Select a provider and enter your API key to enable transcription.
-          </div>
-        {/if}
-      </div>
 
-      <!-- ── Formatting ───────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">Formatting</div>
-        <div class="section-body">
-          <!-- Provider -->
-          <div class="field-row">
-            <span class="field-label">Provider</span>
-            <select class="select" bind:value={fmtProvider}>
-              {#each fmtProviders as p}
-                <option value={p.value}>{p.label}</option>
-              {/each}
-            </select>
-          </div>
+              <div class="field-divider"></div>
 
-          {#if hasFmtProvider}
-            <div class="field-divider"></div>
-
-            <!-- API Key -->
-            <div class="field-row">
-              <span class="field-label">API Key</span>
-              <div class="password-wrapper">
-                <input
-                  class="input"
-                  type={showFmtApiKey ? 'text' : 'password'}
-                  placeholder="Required"
-                  value={effectiveFmtApiKey}
-                  oninput={(e: Event) => { fmtApiKey = (e.target as HTMLInputElement).value; }}
-                  disabled={fmtUseSameKey && canShareApiKey}
-                  autocomplete="off"
-                />
-                <button
-                  class="password-toggle"
-                  onclick={() => { showFmtApiKey = !showFmtApiKey; }}
-                  aria-label={showFmtApiKey ? 'Hide API key' : 'Show API key'}
-                  type="button"
-                >
-                  {#if showFmtApiKey}
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                      <circle cx="8" cy="8" r="2"/>
-                    </svg>
-                  {:else}
-                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                      <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                      <circle cx="8" cy="8" r="2"/>
-                      <line x1="2" y1="14" x2="14" y2="2"/>
-                    </svg>
-                  {/if}
+              <div class="action-row">
+                <div class="field-copy">
+                  <span class="field-label">Onboarding</span>
+                  <span class="field-description">Show setup prompts again the next time Yap needs them.</span>
+                </div>
+                <button class="btn btn-secondary" onclick={resetOnboarding} type="button">
+                  Reset Onboarding
                 </button>
               </div>
-              {#if canShareApiKey}
-                <label class="checkbox-row">
-                  <input type="checkbox" bind:checked={fmtUseSameKey} />
-                  <span class="checkbox-label">Use same API key as transcription</span>
-                </label>
-              {/if}
-            </div>
 
-            <!-- Model -->
-            <div class="field-row">
-              <span class="field-label">Model</span>
-              <input
-                class="input"
-                type="text"
-                placeholder={fmtDefaultModels[fmtProvider] ?? ''}
-                bind:value={fmtModel}
-              />
-              <span class="field-description">
-                Leave empty to use the default ({fmtDefaultModels[fmtProvider] ?? 'none'}).
-              </span>
-            </div>
+              <div class="field-divider"></div>
 
-            <div class="field-divider"></div>
-
-            <!-- Style Picker -->
-            <div class="field-row">
-              <span class="field-label">Style</span>
-              <div class="style-picker">
-                {#each Object.entries(styleData) as [value, data]}
-                  <div class="style-option">
-                    <input
-                      type="radio"
-                      name="fmtStyle"
-                      id="style-{value}"
-                      {value}
-                      checked={fmtStyle === value}
-                      onchange={() => { fmtStyle = value; }}
-                    />
-                    <label for="style-{value}">{data.label}</label>
-                  </div>
-                {/each}
-              </div>
-            </div>
-
-            <!-- Style Preview -->
-            <div class="style-preview">
-              <div class="style-preview-header">
-                <div class="style-preview-title">{currentStyleData.label}</div>
-                <div class="style-preview-desc">{currentStyleData.description}</div>
-              </div>
-              <div class="style-preview-body">
-                <div class="style-preview-col">
-                  <div class="style-preview-label before">Before</div>
-                  <div class="style-preview-text">{styleExampleInput}</div>
+              <div class="action-row">
+                <div class="field-copy">
+                  <span class="field-label">Default settings</span>
+                  <span class="field-description">Restore every setting in this window and turn off Start with system.</span>
                 </div>
-                <div class="style-preview-col">
-                  <div class="style-preview-label after">After</div>
-                  <div class="style-preview-text">{currentStyleData.example}</div>
-                </div>
+                <button class="btn btn-secondary" onclick={resetDefaults} type="button">
+                  Reset Defaults
+                </button>
               </div>
             </div>
-          {/if}
-        </div>
-        {#if !hasFmtProvider}
-          <div class="section-footer">
-            No formatting -- raw transcription will be pasted as-is.
-          </div>
+          </section>
         {/if}
-      </div>
-
-      <!-- ── Appearance ───────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">Appearance</div>
-        <div class="section-body">
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Sound effects</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={soundsEnabled} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Quiet background audio</span>
-              <span class="toggle-description">Reduce or mute other app audio while recording</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={quietAudioWhileRecording} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Gradient background</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={gradientEnabled} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Always-visible pill</span>
-              <span class="toggle-description">Keep the overlay pill visible even when idle</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={alwaysVisiblePill} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-
-          <div class="field-divider"></div>
-
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Start with system</span>
-              <span class="toggle-description">Launch Yap automatically when you log in</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={startWithSystem} onchange={() => { void toggleAutostart(startWithSystem); }} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-        </div>
-      </div>
-
-      <!-- ── History ──────────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">History</div>
-        <div class="section-body">
-          <div class="toggle-row">
-            <div class="toggle-info">
-              <span class="toggle-label">Save transcription history</span>
-            </div>
-            <label class="toggle-switch">
-              <input type="checkbox" bind:checked={historyEnabled} />
-              <span class="toggle-track"></span>
-              <span class="toggle-thumb"></span>
-            </label>
-          </div>
-        </div>
-        {#if !historyEnabled}
-          <div class="section-footer">
-            Transcriptions will not be saved to disk.
-          </div>
-        {/if}
-      </div>
-
-      <!-- ── Advanced ─────────────────────────────────────────────────── -->
-      <div class="settings-section">
-        <div class="section-header">Advanced</div>
-        <div class="section-body">
-          <div class="field-row">
-            <span class="field-label">Speech recognition locale</span>
-            <input
-              class="input"
-              type="text"
-              placeholder="en-US"
-              bind:value={speechLocale}
-            />
-            <span class="field-description">BCP 47 locale for on-device speech recognition (e.g. en-US, ja-JP, fr-FR).</span>
-          </div>
-        </div>
-      </div>
-
-    </div>
-
-    <!-- ── Footer ─────────────────────────────────────────────────────── -->
-    <div class="settings-footer">
-      <div class="settings-footer-left">
-        <button class="btn btn-danger-ghost" onclick={resetDefaults} type="button">
-          Reset Defaults
-        </button>
-        <button class="btn btn-danger-ghost" onclick={resetOnboarding} type="button">
-          Reset Onboarding
-        </button>
-      </div>
-      <button class="btn btn-secondary" onclick={closeWindow} type="button">
-        Cancel
-      </button>
-      <button class="btn btn-primary" onclick={saveConfig} disabled={saving} type="button">
-        {#if saving}
-          Saving...
-        {:else}
-          Save
-        {/if}
-      </button>
+      </main>
     </div>
   </div>
 {/if}
