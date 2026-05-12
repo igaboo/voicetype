@@ -38,6 +38,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
         .build(app)
         .map_err(|e| format!("failed to create settings item: {e}"))?;
 
+    let updates_item = MenuItemBuilder::with_id("updates", "Check for Updates...")
+        .build(app)
+        .map_err(|e| format!("failed to create updates item: {e}"))?;
+
     let quit_item = MenuItemBuilder::with_id("quit", "Quit")
         .build(app)
         .map_err(|e| format!("failed to create quit item: {e}"))?;
@@ -50,6 +54,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
         .item(&enabled_item)
         .item(&history_submenu)
         .item(&settings_item)
+        .item(&updates_item)
         .separator()
         .item(&quit_item)
         .build()
@@ -74,6 +79,10 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
                 }
                 "settings" => {
                     let _ = windows::show_app_window(app, "settings");
+                }
+                "updates" => {
+                    let _ = windows::show_app_window(app, "settings");
+                    let _ = app.emit_to("settings", "settings:show-updates", ());
                 }
                 "show_history" => {
                     let _ = windows::show_app_window(app, "settings");
@@ -187,17 +196,24 @@ pub fn refresh_history_menu(app: &AppHandle) {
                 .checked(true)
                 .build(app);
             let settings_item = MenuItemBuilder::with_id("settings", "Open Yap...").build(app);
+            let updates_item =
+                MenuItemBuilder::with_id("updates", "Check for Updates...").build(app);
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app);
 
-            if let (Ok(title), Ok(enabled), Ok(settings), Ok(quit)) =
-                (title_item, enabled_item, settings_item, quit_item)
-            {
+            if let (Ok(title), Ok(enabled), Ok(settings), Ok(updates), Ok(quit)) = (
+                title_item,
+                enabled_item,
+                settings_item,
+                updates_item,
+                quit_item,
+            ) {
                 if let Ok(menu) = MenuBuilder::new(app)
                     .item(&title)
                     .separator()
                     .item(&enabled)
                     .item(&history_submenu)
                     .item(&settings)
+                    .item(&updates)
                     .separator()
                     .item(&quit)
                     .build()

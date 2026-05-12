@@ -606,6 +606,17 @@ button {
   background: var(--settings-surface-hover);
 }
 
+.btn-primary {
+  border-color: var(--settings-primary);
+  background: var(--settings-primary);
+  color: white;
+}
+
+.btn-primary:hover:not(:disabled) {
+  border-color: var(--settings-primary-hover);
+  background: var(--settings-primary-hover);
+}
+
 .btn-danger {
   color: #e05555;
 }
@@ -744,6 +755,39 @@ button {
   color: CanvasText;
   font-size: 13px;
   font-weight: 600;
+}
+
+.update-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.update-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--settings-text-muted);
+  font-size: 12px;
+}
+
+.update-progress-track {
+  overflow: hidden;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--settings-surface);
+}
+
+.update-progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--settings-primary);
+  transition: width 140ms ease;
+}
+
+.update-error {
+  color: #e05555;
 }
 
 @media (max-width: 720px) {
