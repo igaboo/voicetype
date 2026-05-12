@@ -90,6 +90,19 @@
     groq: 'llama-3.3-70b-versatile',
   };
 
+  const languageOptions = [
+    { value: 'auto', label: 'Auto-detect', providerCode: '', speechLocale: '' },
+    { value: 'en', label: 'English', providerCode: 'en', speechLocale: 'en-US' },
+    { value: 'es', label: 'Spanish', providerCode: 'es', speechLocale: 'es-ES' },
+    { value: 'fr', label: 'French', providerCode: 'fr', speechLocale: 'fr-FR' },
+    { value: 'de', label: 'German', providerCode: 'de', speechLocale: 'de-DE' },
+    { value: 'it', label: 'Italian', providerCode: 'it', speechLocale: 'it-IT' },
+    { value: 'pt', label: 'Portuguese', providerCode: 'pt', speechLocale: 'pt-PT' },
+    { value: 'ja', label: 'Japanese', providerCode: 'ja', speechLocale: 'ja-JP' },
+    { value: 'ko', label: 'Korean', providerCode: 'ko', speechLocale: 'ko-KR' },
+    { value: 'zh', label: 'Chinese', providerCode: 'zh', speechLocale: 'zh-CN' },
+  ];
+
   const styleData: Record<string, { label: string; description: string; example: string }> = {
     casual: {
       label: 'Casual',
@@ -129,7 +142,7 @@
     { id: 'formatting', label: 'Formatting', description: 'Cleanup provider and style' },
     { id: 'behavior', label: 'Behavior', description: 'Paste, audio, and launch' },
     { id: 'history', label: 'History', description: 'Saved transcripts' },
-    { id: 'advanced', label: 'Advanced', description: 'Locale and onboarding' },
+    { id: 'advanced', label: 'Advanced', description: 'Onboarding and reset' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -152,16 +165,14 @@
   let txProvider = $state(defaultTxProvider);
   let txApiKey = $state('');
   let txModel = $state('');
+  let txLanguage = $state('auto');
   let showTxApiKey = $state(false);
 
   // Transcription provider options
   let dgSmartFormat = $state(true);
   let dgKeywords = $state('');
-  let dgLanguage = $state('');
-  let oaiLanguage = $state('');
   let oaiPrompt = $state('');
   let geminiTemperature = $state(0);
-  let elLanguageCode = $state('');
 
   // Formatting
   let fmtProvider = $state('none');
@@ -212,7 +223,6 @@
   let copyTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
 
   // Advanced
-  let speechLocale = $state('');
   let onboardingComplete = $state(false);
 
   // ── Derived ───────────────────────────────────────────────────────────
@@ -234,6 +244,31 @@
 
   let currentStyleData = $derived(styleData[fmtStyle] ?? styleData.formatted);
 
+  function languageOptionFor(value: string) {
+    return languageOptions.find((option) => option.value === value) ?? languageOptions[0];
+  }
+
+  function languageValueFromConfig(cfg: AppConfig): string {
+    const candidates = [
+      cfg.oaiLanguage,
+      cfg.dgLanguage,
+      cfg.elLanguageCode,
+      cfg.speechLocale,
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+      const normalized = candidate.toLowerCase();
+      const match = languageOptions.find((option) => (
+        option.providerCode === normalized ||
+        option.speechLocale.toLowerCase() === normalized ||
+        option.value === normalized
+      ));
+      if (match) return match.value;
+    }
+
+    return 'auto';
+  }
+
   // ── Load Config ───────────────────────────────────────────────────────
 
   async function loadConfig() {
@@ -252,6 +287,7 @@
       txProvider = isWindows && cfg.txProvider === 'none' ? defaultTxProvider : cfg.txProvider;
       txApiKey = cfg.txApiKey;
       txModel = cfg.txModel;
+      txLanguage = languageValueFromConfig(cfg);
       fmtProvider = cfg.fmtProvider;
       fmtApiKey = cfg.fmtApiKey;
       fmtModel = cfg.fmtModel;
@@ -259,17 +295,13 @@
       onboardingComplete = cfg.onboardingComplete;
       dgSmartFormat = cfg.dgSmartFormat;
       dgKeywords = cfg.dgKeywords;
-      dgLanguage = cfg.dgLanguage;
-      oaiLanguage = cfg.oaiLanguage;
       oaiPrompt = cfg.oaiPrompt;
       geminiTemperature = cfg.geminiTemperature;
-      elLanguageCode = cfg.elLanguageCode;
       soundsEnabled = cfg.soundsEnabled;
       quietAudioWhileRecording = cfg.quietAudioWhileRecording ?? true;
       gradientEnabled = cfg.gradientEnabled;
       alwaysVisiblePill = cfg.alwaysVisiblePill;
       historyEnabled = cfg.historyEnabled;
-      speechLocale = cfg.speechLocale;
 
       // Determine if formatting shares the transcription key
       fmtUseSameKey = cfg.fmtApiKey === '' || cfg.fmtApiKey === cfg.txApiKey;
@@ -294,6 +326,8 @@
   // ── Save Config ───────────────────────────────────────────────────────
 
   function currentConfig(): AppConfig {
+    const language = languageOptionFor(txLanguage);
+
     return {
       hotkey,
       audioDevice: selectedMic,
@@ -308,17 +342,17 @@
       onboardingComplete,
       dgSmartFormat,
       dgKeywords,
-      dgLanguage,
-      oaiLanguage,
+      dgLanguage: language.providerCode,
+      oaiLanguage: language.providerCode,
       oaiPrompt,
       geminiTemperature,
-      elLanguageCode,
+      elLanguageCode: language.providerCode,
       soundsEnabled,
       quietAudioWhileRecording,
       gradientEnabled,
       alwaysVisiblePill,
       historyEnabled,
-      speechLocale,
+      speechLocale: language.speechLocale,
     };
   }
 
@@ -349,6 +383,7 @@
     txProvider;
     txApiKey;
     txModel;
+    txLanguage;
     fmtProvider;
     fmtApiKey;
     fmtModel;
@@ -356,17 +391,13 @@
     onboardingComplete;
     dgSmartFormat;
     dgKeywords;
-    dgLanguage;
-    oaiLanguage;
     oaiPrompt;
     geminiTemperature;
-    elLanguageCode;
     soundsEnabled;
     quietAudioWhileRecording;
     gradientEnabled;
     alwaysVisiblePill;
     historyEnabled;
-    speechLocale;
     fmtUseSameKey;
 
     scheduleSave();
@@ -759,6 +790,7 @@
     txProvider = defaultTxProvider;
     txApiKey = '';
     txModel = '';
+    txLanguage = 'auto';
     fmtProvider = 'none';
     fmtApiKey = '';
     fmtModel = '';
@@ -766,11 +798,8 @@
     onboardingComplete = false;
     dgSmartFormat = true;
     dgKeywords = '';
-    dgLanguage = '';
-    oaiLanguage = '';
     oaiPrompt = '';
     geminiTemperature = 0;
-    elLanguageCode = '';
     soundsEnabled = true;
     quietAudioWhileRecording = true;
     gradientEnabled = true;
@@ -778,7 +807,6 @@
     startWithSystem = false;
     void toggleAutostart(false);
     historyEnabled = true;
-    speechLocale = '';
     void persistConfig();
   }
 
@@ -983,6 +1011,16 @@
                 </select>
               </div>
 
+              <div class="field-row">
+                <span class="field-label">Language</span>
+                <select class="select" bind:value={txLanguage}>
+                  {#each languageOptions as language}
+                    <option value={language.value}>{language.label}</option>
+                  {/each}
+                </select>
+                <span class="field-description">Auto-detect works best for most people. Choose a language when recognition needs a hint.</span>
+              </div>
+
               {#if hasTxProvider}
                 <div class="field-divider"></div>
 
@@ -1047,17 +1085,6 @@
                   </div>
 
                   <div class="field-row">
-                    <span class="field-label">Language</span>
-                    <input
-                      class="input"
-                      type="text"
-                      placeholder="Auto-detect"
-                      bind:value={dgLanguage}
-                    />
-                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr, ja). Leave empty to auto-detect.</span>
-                  </div>
-
-                  <div class="field-row">
                     <span class="field-label">Keywords</span>
                     <input
                       class="input"
@@ -1071,17 +1098,6 @@
 
                 {#if txProvider === 'openai'}
                   <div class="field-divider"></div>
-
-                  <div class="field-row">
-                    <span class="field-label">Language</span>
-                    <input
-                      class="input"
-                      type="text"
-                      placeholder="Auto-detect"
-                      bind:value={oaiLanguage}
-                    />
-                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Improves accuracy and speed.</span>
-                  </div>
 
                   <div class="field-row">
                     <span class="field-label">Prompt</span>
@@ -1115,20 +1131,6 @@
                   </div>
                 {/if}
 
-                {#if txProvider === 'elevenlabs'}
-                  <div class="field-divider"></div>
-
-                  <div class="field-row">
-                    <span class="field-label">Language Code</span>
-                    <input
-                      class="input"
-                      type="text"
-                      placeholder="Auto-detect"
-                      bind:value={elLanguageCode}
-                    />
-                    <span class="field-description">ISO 639-1 language code (e.g. en, es, fr). Leave empty to auto-detect.</span>
-                  </div>
-                {/if}
               {/if}
             </div>
             {#if !hasTxProvider}
@@ -1449,19 +1451,6 @@
         {#if activeSection === 'advanced'}
           <section class="settings-section" aria-label="Advanced settings">
             <div class="section-body">
-              <div class="field-row">
-                <span class="field-label">Speech recognition locale</span>
-                <input
-                  class="input"
-                  type="text"
-                  placeholder="en-US"
-                  bind:value={speechLocale}
-                />
-                <span class="field-description">BCP 47 locale for on-device speech recognition (e.g. en-US, ja-JP, fr-FR).</span>
-              </div>
-
-              <div class="field-divider"></div>
-
               <div class="action-row">
                 <div class="field-copy">
                   <span class="field-label">Onboarding</span>
