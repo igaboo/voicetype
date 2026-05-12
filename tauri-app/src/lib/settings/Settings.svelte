@@ -576,35 +576,44 @@
 
   // ── Hotkey Display ────────────────────────────────────────────────────
 
+  function hotkeyDisplayParts(key: string): string[] {
+    return key
+      .split('+')
+      .filter(Boolean)
+      .map(hotkeyDisplayPartLabel);
+  }
+
   function hotkeyDisplayLabel(key: string): string {
     return key
       .split('+')
       .filter(Boolean)
-      .map((part) => {
-        if (part === 'cmd') return 'Cmd';
-        if (part === 'ctrl') return 'Ctrl';
-        if (part === 'option') return 'Option';
-        if (part === 'shift') return 'Shift';
-        if (part === 'fn') return 'fn';
-        if (part === 'space') return 'Space';
-        if (part === 'return') return 'Return';
-        if (part === 'escape') return 'Esc';
-        if (part === 'delete') return 'Delete';
-        if (part === 'forwarddelete') return 'Forward Delete';
-        if (part === 'capslock') return 'Caps Lock';
-        if (part === 'pageup') return 'Page Up';
-        if (part === 'pagedown') return 'Page Down';
-        if (part === 'left') return 'Left';
-        if (part === 'right') return 'Right';
-        if (part === 'up') return 'Up';
-        if (part === 'down') return 'Down';
-        if (part.startsWith('keycode:')) return `Key ${part.slice('keycode:'.length)}`;
-        if (part.startsWith('vk:')) return `Key ${part.slice('vk:'.length)}`;
-        if (part.length === 1) return part.toUpperCase();
-        if (/^f\d{1,2}$/.test(part)) return part.toUpperCase();
-        return part;
-      })
+      .map(hotkeyDisplayPartLabel)
       .join('+');
+  }
+
+  function hotkeyDisplayPartLabel(part: string): string {
+    if (part === 'cmd') return 'Cmd';
+    if (part === 'ctrl') return 'Ctrl';
+    if (part === 'option') return 'Option';
+    if (part === 'shift') return 'Shift';
+    if (part === 'fn') return 'fn';
+    if (part === 'space') return 'Space';
+    if (part === 'return') return 'Return';
+    if (part === 'escape') return 'Esc';
+    if (part === 'delete') return 'Delete';
+    if (part === 'forwarddelete') return 'Forward Delete';
+    if (part === 'capslock') return 'Caps Lock';
+    if (part === 'pageup') return 'Page Up';
+    if (part === 'pagedown') return 'Page Down';
+    if (part === 'left') return 'Left';
+    if (part === 'right') return 'Right';
+    if (part === 'up') return 'Up';
+    if (part === 'down') return 'Down';
+    if (part.startsWith('keycode:')) return `Key ${part.slice('keycode:'.length)}`;
+    if (part.startsWith('vk:')) return `Key ${part.slice('vk:'.length)}`;
+    if (part.length === 1) return part.toUpperCase();
+    if (/^f\d{1,2}$/.test(part)) return part.toUpperCase();
+    return part;
   }
 
   // ── History Entries ──────────────────────────────────────────────────
@@ -902,7 +911,7 @@
         {#if activeSection === 'general'}
           <section class="settings-section" aria-label="General settings">
             <div class="section-body">
-              <div class="field-row split">
+              <div class="field-row hotkey-field">
                 <div class="field-copy">
                   <span class="field-label">Hotkey</span>
                   <span class="field-description">
@@ -916,11 +925,32 @@
                   class:capturing={capturingHotkey}
                   onclick={toggleHotkeyCapture}
                   type="button"
+                  aria-label={capturingHotkey ? 'Press shortcut' : `Current hotkey: ${hotkeyDisplayLabel(hotkey)}`}
                 >
                   {#if capturingHotkey}
-                    {hotkeyPreview ? hotkeyDisplayLabel(hotkeyPreview) : 'Press shortcut...'}
+                    {#if hotkeyPreview}
+                      <span class="keycap-stack" aria-hidden="true">
+                        {#each hotkeyDisplayParts(hotkeyPreview) as part, index}
+                          <span class="keycap keycap-live">{part}</span>
+                          {#if index < hotkeyDisplayParts(hotkeyPreview).length - 1}
+                            <span class="keycap-plus" aria-hidden="true">+</span>
+                          {/if}
+                        {/each}
+                      </span>
+                      <span class="sr-only">{hotkeyDisplayLabel(hotkeyPreview)}</span>
+                    {:else}
+                      <span class="hotkey-placeholder">Press shortcut...</span>
+                    {/if}
                   {:else}
-                    {hotkeyDisplayLabel(hotkey)}
+                    <span class="keycap-stack" aria-hidden="true">
+                      {#each hotkeyDisplayParts(hotkey) as part, index}
+                        <span class="keycap">{part}</span>
+                        {#if index < hotkeyDisplayParts(hotkey).length - 1}
+                          <span class="keycap-plus" aria-hidden="true">+</span>
+                        {/if}
+                      {/each}
+                    </span>
+                    <span class="sr-only">{hotkeyDisplayLabel(hotkey)}</span>
                   {/if}
                 </button>
               </div>
