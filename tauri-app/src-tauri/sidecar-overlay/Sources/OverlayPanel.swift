@@ -897,7 +897,7 @@ struct PermissionCardView: View {
                 .font(.system(size: 13, weight: .medium))
                 .foregroundColor(.white.opacity(0.78))
                 .multilineTextAlignment(.center)
-                .lineLimit(2)
+                .lineLimit(4)
                 .frame(width: 315)
 
             Text(prompt.actionLabel)

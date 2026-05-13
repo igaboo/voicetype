@@ -353,10 +353,7 @@ impl OrchestratorInner {
                 Some(PermissionPromptKind::Accessibility) => {
                     crate::sidecar::send(&crate::sidecar::OutMessage::Permission {
                         title: "Enable Accessibility".to_string(),
-                        message: format!(
-                            "Yap needs Accessibility for {}. If it keeps showing, remove Yap with the minus button, then enable it again.",
-                            self.hotkey_label
-                        ),
+                        message: "Yap needs Accessibility to detect your record shortcut in other apps. If this keeps showing, remove Yap from Accessibility and restart.".to_string(),
                         action_label: "Open System Settings".to_string(),
                         visible: true,
                     });
@@ -502,29 +499,29 @@ impl Orchestrator {
 
     #[cfg(target_os = "macos")]
     fn finish_permission_granted(&self, prompt: PermissionPromptKind) {
-        let restart_after_grant = match prompt {
+        match prompt {
             PermissionPromptKind::Accessibility => {
-                log::info("Accessibility granted; restarting app to refresh event tap trust");
+                log::info("Accessibility granted; restarting hotkey listener");
                 hotkey::stop();
-                true
+                let cfg = config::get();
+                let spec = parse_hotkey_spec(&cfg.hotkey);
+                let app = self.app_handle();
+                let orch = app.state::<Arc<Orchestrator>>();
+                start_hotkey_listener(Arc::clone(&orch), spec);
             }
-        };
+        }
 
-        {
-            let mut inner = self.inner.lock().unwrap();
-            inner.permission_prompt = None;
-            inner.permission_poll_pending = false;
-            inner.emit_permission_prompt();
-            inner.emit_state();
+        let mut inner = self.inner.lock().unwrap();
+        inner.permission_prompt = None;
+        inner.permission_poll_pending = false;
+        inner.emit_permission_prompt();
+        inner.emit_state();
 
-            if !inner.onboarding_complete && inner.onboarding_step.is_none() {
+        if !inner.onboarding_complete {
+            if inner.onboarding_step.is_none() {
                 inner.onboarding_step = Some(OnboardingStep::TryIt);
             }
             inner.emit_onboarding();
-        }
-
-        if restart_after_grant {
-            self.app_handle().request_restart();
         }
     }
 
