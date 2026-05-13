@@ -16,6 +16,8 @@ User installation should point to GitHub Releases first. These commands are for 
 
 The canonical application lives in `tauri-app/`. The old root-level Swift package has been removed; Swift remains only as the macOS overlay sidecar under `tauri-app/src-tauri/sidecar-overlay/`.
 
+Tauri project layout note: official Tauri scaffolds normally put `package.json`, `src/`, and `src-tauri/` in the same app package root. Yap follows that layout inside `tauri-app/`; the repository root is a wrapper for docs and repo-level metadata.
+
 Runtime permissions:
 
 - macOS: Microphone, Speech Recognition, and Accessibility.
@@ -48,17 +50,22 @@ Hotkey provider
 - `tauri-app/src-tauri/src/win_overlay.rs` - Windows native overlay implementation.
 - `tauri-app/src-tauri/src/sidecar.rs` - macOS overlay sidecar process management.
 - `tauri-app/src-tauri/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS.
-- `tauri-app/src/lib/settings/` - Svelte settings UI, including transcription history.
+- `tauri-app/src-tauri/sounds/` - bundled WAV sound effects.
+- `tauri-app/src-tauri/icons/` - app, Windows, macOS, and tray icons used by builds.
+- `tauri-app/src/lib/settings/` - Svelte settings UI, transcription history, and update checks.
 - `tauri-app/src/lib/overlay/` - Svelte overlay view used where needed.
 
 ## Config
 
-Config is stored at `~/.config/yap/config.json`. Important fields include:
+Config is stored at `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\config.json` on Windows. Important fields include:
 
 - `hotkey`
 - `audio_device`
+- `press_enter_after_paste`
 - `tx_provider`, `tx_api_key`, `tx_model`
 - `fmt_provider`, `fmt_api_key`, `fmt_model`, `fmt_style`
+- `sounds_enabled`, `quiet_audio_while_recording`, `gradient_enabled`, `always_visible_pill`
+- `history_enabled`, `speech_locale`
 - provider-specific Deepgram, OpenAI, Gemini, and ElevenLabs options
 
 Empty model strings fall back to provider defaults. Formatting falls back to the transcription API key when its own API key is blank.
@@ -67,4 +74,4 @@ Empty model strings fall back to provider defaults. Formatting falls back to the
 
 - Keep cross-platform behavior in the Rust orchestrator where possible.
 - Use platform-specific code only for OS integration: hotkeys, overlay behavior, paste, speech, bundling, and permissions.
-- The app and tray icons used by builds live under `tauri-app/src-tauri/icons/`.
+- macOS on-device transcription is implemented; Windows on-device transcription currently returns unavailable, so Windows needs an API transcription provider.

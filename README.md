@@ -31,49 +31,60 @@
 
 ## Install
 
-Download the latest macOS or Windows installer from the repository's **Resources -> Releases** section:
+Download the latest macOS or Windows installer from GitHub Releases:
 
 https://github.com/oobagi/yap/releases/latest
 
 ## Features
 
-- Push-to-talk dictation: hold a hotkey, speak, release to paste.
-- Hands-free recording by double-tapping the hotkey or clicking the floating pill.
-- Transcription with Apple on-device speech, Gemini, OpenAI, Deepgram, or ElevenLabs.
-- Optional formatting with Gemini, OpenAI, Anthropic, or Groq.
-- Clipboard restore after paste.
-- Local speech checks so very short or silent recordings are discarded before paid APIs are called.
+- Global push-to-talk dictation that pastes into the active app.
+- Hands-free recording from the hotkey or floating pill.
+- Local macOS transcription or cloud transcription with Gemini, OpenAI, Deepgram, and ElevenLabs.
+- Optional cleanup styles for casual, formatted, or professional text.
+- Local transcript history and in-app update checks.
 
 ## Set Up Transcription
 
-Open the tray/menu bar icon, choose **Settings**, then pick a transcription provider.
+Open the tray/menu bar icon, choose **Settings**, then pick a transcription provider. Windows does not have the macOS on-device option, so choose one of the API providers below.
 
-| Provider | Key |
-|---|---|
-| On-device | No key needed. macOS only. |
-| [Gemini](https://ai.google.dev/gemini-api/docs/api-key) | Gemini API key |
-| [OpenAI](https://platform.openai.com/api-keys) | OpenAI API key |
-| [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys) | Deepgram API key |
-| [ElevenLabs](https://elevenlabs.io/docs/api-reference/authentication) | ElevenLabs API key |
+- On-device transcription (macOS only, no API key)
+- [Gemini](https://ai.google.dev/gemini-api/docs/api-key)
+- [OpenAI](https://platform.openai.com/api-keys)
+- [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys)
+- [ElevenLabs](https://elevenlabs.io/docs/api-reference/authentication)
 
-Paste the key into **Settings -> Transcription -> API key**. Leave the model field blank to use Yap's default.
-
-Windows does not have the macOS on-device option, so choose one of the API providers above.
+For API providers, paste the provider key into **Settings -> Transcription -> API key**. Leave the model field blank to use Yap's default.
 
 ## Optional Formatting
 
 Formatting can clean up the transcript after transcription. Choose **Casual**, **Formatted**, or **Professional**, then add a key if needed.
 
-| Provider | Key |
-|---|---|
-| [Gemini](https://ai.google.dev/gemini-api/docs/api-key) | Gemini API key |
-| [OpenAI](https://platform.openai.com/api-keys) | OpenAI API key |
-| [Anthropic](https://platform.claude.com/settings/keys) | Anthropic API key |
-| [Groq](https://console.groq.com/keys) | Groq API key |
+- [Gemini](https://ai.google.dev/gemini-api/docs/api-key)
+- [OpenAI](https://platform.openai.com/api-keys)
+- [Anthropic](https://platform.claude.com/settings/keys)
+- [Groq](https://console.groq.com/keys)
 
-Paste the key into **Settings -> Formatting -> API key**. If formatting uses the same provider as transcription, Yap can reuse the transcription key.
+Paste the provider key into **Settings -> Formatting -> API key**. If formatting uses the same provider as transcription, Yap can reuse the transcription key.
 
-Your settings are stored locally in `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\config.json` on Windows.
+## Config
+
+Settings are stored in `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\config.json` on Windows.
+Most options can be changed from **Settings** in the tray/menu bar app.
+
+```json
+{
+  "hotkey": "fn",
+  "txProvider": "openai",
+  "txApiKey": "",
+  "txModel": "",
+  "fmtProvider": "none",
+  "fmtApiKey": "",
+  "fmtModel": "",
+  "fmtStyle": "formatted",
+  "alwaysVisiblePill": true,
+  "historyEnabled": true
+}
+```
 
 ## Build From Source
 
@@ -87,7 +98,7 @@ npm run tauri -- dev        # run the desktop app in development
 npm run tauri -- build      # create app bundles/installers
 ```
 
-macOS builds require Xcode Command Line Tools for the Swift overlay sidecar. Windows builds require the standard Tauri Windows toolchain.
+macOS builds require Xcode Command Line Tools for the Swift/AppKit overlay sidecar. Windows builds require the standard Tauri Windows toolchain and WebView2 runtime support.
 
 ## License
 

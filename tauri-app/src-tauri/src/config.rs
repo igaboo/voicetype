@@ -124,7 +124,7 @@ impl AppConfig {
 
 fn default_hotkey() -> String {
     if cfg!(target_os = "windows") {
-        "ctrl+space".to_string()
+        "capslock".to_string()
     } else {
         "fn".to_string()
     }

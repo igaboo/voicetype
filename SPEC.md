@@ -16,7 +16,7 @@ This document is the single source of truth for feature parity in the Tauri-base
 | macOS bundle ID | `com.yap.desktop` |
 | Windows app ID | `com.yap.desktop` |
 | Version scheme | SemVer: `MAJOR.MINOR.PATCH` |
-| Current version | `2.0.1` |
+| Current version | `2.3.2` |
 | Activation policy | **Background/accessory** -- no Dock icon (macOS `LSUIElement = true`), no taskbar window (Windows: tray-only) |
 
 ---
@@ -86,8 +86,12 @@ processing --(error)--> idle  (show error overlay)
 
 | Hotkey | macOS mask | Windows equivalent |
 |--------|------------|-------------------|
-| fn / Globe | `0x00800000` (raw flag) | F24 or configurable virtual key |
+| fn / Globe | `0x00800000` (raw flag) | Not generally available as a user-space key |
 | Option | `CGEventFlags.maskAlternate` | Alt key |
+| Caps Lock | Configurable trigger key | Default Windows shortcut |
+| Ctrl+Space | Configurable shortcut | Supported but no longer default |
+
+macOS defaults to `fn`/Globe. Windows defaults to `capslock` because it gives a one-key push-to-talk target without pretending that Windows exposes a real Fn key. Yap should present this honestly as Caps Lock, not fake it as Fn.
 
 ### Press/Release Semantics
 
@@ -192,10 +196,10 @@ Peak audio level is the maximum RMS*18 value seen during the recording (the `lev
 
 ## 6. Transcription Providers
 
-### Provider: None (Apple Speech / Windows Speech)
+### Provider: None (Apple Speech)
 
 - macOS: `SFSpeechRecognizer` with locale `en-US`. `shouldReportPartialResults = false`. On macOS 13+, `addsPunctuation = true`.
-- Windows: `System.Speech.Recognition.SpeechRecognitionEngine` or `Windows.Media.SpeechRecognition`.
+- Windows: unavailable in the current implementation.
 - Used as: (a) primary transcriber when no API is configured, (b) pre-check before API calls to verify speech exists.
 
 ### Provider: Gemini
@@ -315,9 +319,9 @@ estimatedSeconds = audioData.count / 64000  (conservative middle estimate for PC
 timeout = max(30.0, 30.0 + estimatedSeconds)
 ```
 
-### Apple Speech Pre-check
+### On-Device Speech Pre-check
 
-Before sending audio to any API provider, run a quick Apple Speech / Windows Speech on-device transcription. If the result is empty or an error, skip the API call entirely and show `speakTip`. This saves API costs on silence/noise recordings.
+Before sending audio to an API provider on macOS, run a quick Apple Speech on-device transcription. If the result is empty or an error, skip the API call entirely and show the no-speech/skip path. This saves API costs on silence/noise recordings. Windows does not currently have an on-device speech implementation in Yap.
 
 ---
 
@@ -627,6 +631,7 @@ When `alwaysVisiblePill` is true, the pill remains on screen in idle state (mini
 | "Enabled" | Cmd+E / Ctrl+E | Toggle, checkmark state. Controls `isEnabled` flag. |
 | "History" (submenu) | -- | Submenu with recent entries, "Show All...", "Clear History" |
 | "Settings..." | Cmd+, / Ctrl+, | Opens settings window |
+| "Check for Updates..." | -- | Opens Settings and starts an updater check |
 | separator | -- | -- |
 | "Quit" | Cmd+Q / Ctrl+Q | Terminates app |
 
@@ -654,7 +659,9 @@ When `alwaysVisiblePill` is true, the pill remains on screen in idle state (mini
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `hotkey` | String | `"fn"` | `"fn"` or `"option"` |
+| `hotkey` | String | platform default | `"fn"`, `"option"`, `"capslock"`, or a configurable shortcut such as `"ctrl+space"` |
+| `audioDevice` | String | `""` | Preferred input device name; empty means system default |
+| `pressEnterAfterPaste` | Bool | `false` | Press Return/Enter after pasting |
 | `txProvider` | String | `"none"` | Transcription provider: `none`, `gemini`, `openai`, `deepgram`, `elevenlabs` |
 | `txApiKey` | String | `""` | Transcription API key |
 | `txModel` | String | `""` | Transcription model (empty = provider default) |
@@ -671,9 +678,13 @@ When `alwaysVisiblePill` is true, the pill remains on screen in idle state (mini
 | `geminiTemperature` | Double | `0.0` | Gemini: temperature (0.0-1.0) |
 | `elLanguageCode` | String | `""` | ElevenLabs: ISO 639-1 language code |
 | `soundsEnabled` | Bool | `true` | Play sound effects |
+| `quietAudioWhileRecording` | Bool | `true` | Reduce or mute other app audio while recording |
 | `gradientEnabled` | Bool | `true` | Show lava lamp gradient background |
 | `alwaysVisiblePill` | Bool | `true` | Keep pill visible when idle |
 | `historyEnabled` | Bool | `true` | Save transcription history to disk |
+| `speechLocale` | String | `""` | BCP 47 locale for on-device speech; empty defaults to `en-US` |
+
+The platform default for `hotkey` is `fn` on macOS and `capslock` on Windows.
 
 ### API Key Sharing
 
@@ -681,8 +692,8 @@ When transcription and formatting use the same backend (Gemini-Gemini or OpenAI-
 
 ### Settings Window
 
-- Size: 500 x 680 pt/dp.
-- Sections: General (hotkey), Transcription, Formatting, Appearance, History.
+- Size: 820 x 680 pt/dp.
+- Sections: General, Transcription, Formatting, History, Advanced.
 - Save button persists all values and triggers `settingsDidChange()`.
 - Cancel button discards changes.
 - "Reset Onboarding" button clears `onboardingComplete`.
@@ -693,7 +704,7 @@ When transcription and formatting use the same backend (Gemini-Gemini or OpenAI-
 
 ### macOS
 
-- **Primary storage**: `UserDefaults.standard` (NSUserDefaults).
+- **Primary storage**: `~/.config/yap/config.json`
 - **History file**: `~/.config/yap/history.json`
 - **Debug log**: `~/.config/yap/debug.log`
 
@@ -703,11 +714,13 @@ When transcription and formatting use the same backend (Gemini-Gemini or OpenAI-
 - **History file**: `%APPDATA%\yap\history.json`
 - **Debug log**: `%APPDATA%\yap\debug.log`
 
-### Config JSON Format (Windows)
+### Config JSON Format
 
 ```json
 {
   "hotkey": "fn",
+  "audioDevice": "",
+  "pressEnterAfterPaste": false,
   "txProvider": "none",
   "txApiKey": "",
   "txModel": "",
@@ -724,9 +737,11 @@ When transcription and formatting use the same backend (Gemini-Gemini or OpenAI-
   "geminiTemperature": 0.0,
   "elLanguageCode": "",
   "soundsEnabled": true,
+  "quietAudioWhileRecording": true,
   "gradientEnabled": true,
   "alwaysVisiblePill": true,
-  "historyEnabled": true
+  "historyEnabled": true,
+  "speechLocale": ""
 }
 ```
 
@@ -836,15 +851,17 @@ After `welcome` step is confirmed, set `onboardingComplete = true` and hide onbo
 
 | Event | Sound | File |
 |-------|-------|------|
-| Recording starts | "Blow" | `Blow.aiff` |
-| Recording stops / processing begins | "Pop" | `Pop.aiff` |
-| Onboarding hold-to-confirm success | "Pop" | `Pop.aiff` |
-| Onboarding step completion (nice) | "Submarine" | `Submarine.aiff` |
-| Short-tap cancel (holdTip) | "Pop" | `Pop.aiff` |
+| Recording starts | "Blow" | `Blow.wav` |
+| Recording stops / processing begins | "Pop" | `Pop.wav` |
+| Hands-free starts | "HandsFree" | `HandsFree.wav` |
+| Onboarding hold-to-confirm success | "Pop" | `Pop.wav` |
+| Onboarding step completion (nice) | "Submarine" | `Submarine.wav` |
+| Silent-skip / no speech | "Skip" | `Skip.wav` |
+| Error | "Error" | `Error.wav` |
 
 ### Preloading
 
-All three sounds (`Pop`, `Blow`, `Submarine`) are preloaded at app launch with `prepareToPlay()` for zero-latency playback.
+Bundled sounds live under `tauri-app/src-tauri/sounds/` and are included as Tauri resources via `bundle.resources`.
 
 ### Timing
 
@@ -856,8 +873,7 @@ Sounds are gated by the `soundsEnabled` setting. When false, `playSound()` is a 
 
 ### Platform Notes
 
-- macOS: System AIFF sounds from the app bundle via `AVAudioPlayer`.
-- Windows: WAV equivalents bundled with the app, played via `SoundPlayer` or `MediaPlayer`.
+- macOS/Windows: WAV files bundled with the app and played through the Rust sound path.
 
 ---
 
@@ -876,7 +892,7 @@ Sounds are gated by the `soundsEnabled` setting. When false, `playSound()` is a 
 | Permission | API | Purpose |
 |------------|-----|---------|
 | Microphone | UWP capability or user consent dialog | Audio recording |
-| Speech Recognition | Windows Speech runtime | On-device transcription |
+| Speech Recognition | Not currently implemented | Windows uses API transcription providers |
 | UI Automation / Input simulation | No special permission needed (SendInput works without elevation) | Ctrl+V simulation |
 | Low-level keyboard hook | No special permission | Hotkey monitoring |
 
@@ -944,3 +960,24 @@ Content-Disposition: form-data; name="{field_name}"\r\n
 ```
 
 Boundary is a UUID string.
+
+---
+
+## 20. Repository and Tauri Layout
+
+The canonical application package is `tauri-app/`.
+
+```
+tauri-app/
+  package.json
+  src/
+  src-tauri/
+    tauri.conf.json
+    Cargo.toml
+    src/
+    sidecar-overlay/
+    icons/
+    sounds/
+```
+
+This follows the standard Tauri shape inside the app package: JavaScript/Svelte files at the package root and the Rust project in `src-tauri/`. The repository root intentionally wraps that package so project docs and GitHub metadata can live outside the frontend package root.

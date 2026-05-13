@@ -63,7 +63,7 @@
 
   const isWindows = navigator.userAgent.toLowerCase().includes('windows');
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-  const defaultHotkey = isWindows ? 'ctrl+space' : 'fn';
+  const defaultHotkey = isWindows ? 'capslock' : 'fn';
   const defaultTxProvider = isWindows ? 'openai' : 'none';
   const buildLabel = `v${__APP_VERSION__} (${__GIT_COMMIT_SHORT__})`;
   const buildUrl = __GITHUB_COMMIT_URL__;
