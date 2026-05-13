@@ -106,6 +106,16 @@ button {
   font-size: 12px;
 }
 
+.sidebar-version-link {
+  display: inline-block;
+  text-decoration: none;
+}
+
+.sidebar-version-link:hover {
+  color: CanvasText;
+  text-decoration: underline;
+}
+
 .section-nav {
   display: flex;
   flex: 1;
@@ -527,8 +537,9 @@ button {
 }
 
 .style-preview {
+  margin-top: -6px;
   border-top: 1px solid var(--settings-border-muted);
-  padding-top: 14px;
+  padding-top: 8px;
 }
 
 .style-preview-header {
@@ -580,6 +591,7 @@ button {
 .field-divider {
   width: 100%;
   height: 1px;
+  margin: -6px 0;
   background: var(--settings-border-muted);
 }
 

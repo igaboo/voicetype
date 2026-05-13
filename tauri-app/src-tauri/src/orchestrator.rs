@@ -1093,24 +1093,6 @@ impl Orchestrator {
         inner.emit_onboarding();
     }
 
-    /// Reset onboarding immediately from settings and persist the change.
-    pub fn reset_onboarding(&self) -> Result<(), String> {
-        config::update(|cfg| {
-            cfg.onboarding_complete = false;
-        })?;
-
-        let mut inner = self.inner.lock().unwrap();
-        inner.onboarding_complete = false;
-        inner.onboarding_step = Some(OnboardingStep::TryIt);
-        inner.hold_confirm_start = None;
-        inner.state = AppState::Idle;
-        inner.emit_state();
-        inner.emit_onboarding();
-        log::info("Onboarding reset");
-
-        Ok(())
-    }
-
     /// Advance from the current onboarding step to the next.
     fn advance_onboarding_step(&self) {
         let mut inner = self.inner.lock().unwrap();

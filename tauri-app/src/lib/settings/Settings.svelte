@@ -1,3 +1,9 @@
+<script module lang="ts">
+  declare const __APP_VERSION__: string;
+  declare const __GIT_COMMIT_SHORT__: string;
+  declare const __GITHUB_COMMIT_URL__: string;
+</script>
+
 <script lang="ts">
   /**
    * Full settings UI for the Yap Tauri app.
@@ -10,6 +16,7 @@
   import './settings.css';
   import { invoke } from '@tauri-apps/api/core';
   import { confirm as confirmDialog } from '@tauri-apps/plugin-dialog';
+  import { openUrl } from '@tauri-apps/plugin-opener';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { onDestroy } from 'svelte';
   import type { DownloadEvent, Update } from '@tauri-apps/plugin-updater';
@@ -58,6 +65,8 @@
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const defaultHotkey = isWindows ? 'ctrl+space' : 'fn';
   const defaultTxProvider = isWindows ? 'openai' : 'none';
+  const buildLabel = `v${__APP_VERSION__} (${__GIT_COMMIT_SHORT__})`;
+  const buildUrl = __GITHUB_COMMIT_URL__;
 
   const txProviders: Array<{ value: string; label: string; disabled?: boolean }> = [
     { value: 'none', label: isWindows ? 'On-device (macOS only)' : 'On-device', disabled: isWindows },
@@ -139,11 +148,11 @@
   type UpdateStatus = 'idle' | 'checking' | 'available' | 'upToDate' | 'downloading' | 'ready' | 'error';
 
   const settingsSections: Array<{ id: SectionId; label: string; description: string }> = [
-    { id: 'general', label: 'General', description: 'Shortcut, microphone, and behavior' },
-    { id: 'transcription', label: 'Transcription', description: 'Provider, model, and accuracy' },
-    { id: 'formatting', label: 'Formatting', description: 'Cleanup provider and style' },
-    { id: 'history', label: 'History', description: 'Saved transcripts' },
-    { id: 'advanced', label: 'Advanced', description: 'Updates and reset' },
+    { id: 'general', label: 'General', description: 'Hotkey, microphone, and app behavior' },
+    { id: 'transcription', label: 'Transcription', description: 'Transcription provider and model' },
+    { id: 'formatting', label: 'Formatting', description: 'Formatting provider and model' },
+    { id: 'history', label: 'History', description: 'Recent transcript history' },
+    { id: 'advanced', label: 'Advanced', description: 'Updates and defaults' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -433,6 +442,17 @@
       await getCurrentWindow().startDragging();
     } catch (error) {
       console.error('Failed to start window drag:', error);
+    }
+  }
+
+  async function openBuildLink(event: MouseEvent) {
+    if (!isTauriRuntime) return;
+
+    event.preventDefault();
+    try {
+      await openUrl(buildUrl);
+    } catch (e) {
+      console.error('Failed to open build link:', e);
     }
   }
 
@@ -859,8 +879,6 @@
     }
   }
 
-  // ── Reset Onboarding ─────────────────────────────────────────────────
-
   async function confirmAction(message: string, okLabel: string): Promise<boolean> {
     if (!isTauriRuntime) {
       return window.confirm(message);
@@ -876,22 +894,6 @@
 
   async function confirmReset(message: string): Promise<boolean> {
     return confirmAction(message, 'Reset');
-  }
-
-  async function resetOnboarding() {
-    const confirmed = await confirmReset(
-      'Reset onboarding? Yap will show setup prompts again the next time they are needed.'
-    );
-    if (!confirmed) return;
-
-    onboardingComplete = false;
-    if (!isTauriRuntime) return;
-
-    try {
-      await invoke('reset_onboarding');
-    } catch (e) {
-      console.error('Failed to reset onboarding:', e);
-    }
   }
 
   async function resetDefaults() {
@@ -1043,7 +1045,16 @@
         <img class="app-icon" src="/favicon.png" alt="" aria-hidden="true" />
         <div>
           <div class="sidebar-title">Yap</div>
-          <div class="sidebar-subtitle">Settings</div>
+          <a
+            class="sidebar-subtitle sidebar-version-link"
+            href={buildUrl}
+            onclick={openBuildLink}
+            target="_blank"
+            rel="noreferrer"
+            title="Open this build on GitHub"
+          >
+            {buildLabel}
+          </a>
         </div>
       </div>
 
@@ -1107,7 +1118,7 @@
                     <span class="sr-only">{hotkeyDisplayLabel(hotkey)}</span>
                   {/if}
                 </button>
-                <span class="field-description">Press the exact key or combination.</span>
+                <span class="field-description">Set the global keyboard shortcut.</span>
               </div>
 
               <div class="field-row">
@@ -1128,7 +1139,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Start with system</span>
-                  <span class="toggle-description">Launch Yap automatically when you log in</span>
+                  <span class="toggle-description">Start Yap automatically after login.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={startWithSystem} onchange={() => { void toggleAutostart(startWithSystem); }} />
@@ -1142,7 +1153,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Press Enter after paste</span>
-                  <span class="toggle-description">Send Return after Yap inserts the transcription</span>
+                  <span class="toggle-description">Paste the transcription, then press Enter.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={pressEnterAfterPaste} />
@@ -1156,7 +1167,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Sound effects</span>
-                  <span class="toggle-description">Play cues for recording, completion, and errors</span>
+                  <span class="toggle-description">Play sounds for recording, completion, and errors.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={soundsEnabled} />
@@ -1170,7 +1181,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Quiet background audio</span>
-                  <span class="toggle-description">Reduce or mute other app audio while recording</span>
+                  <span class="toggle-description">Mute other apps while recording.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={quietAudioWhileRecording} />
@@ -1184,7 +1195,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Gradient background</span>
-                  <span class="toggle-description">Show the animated gradient in the overlay pill</span>
+                  <span class="toggle-description">Show the animated background while recording.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={gradientEnabled} />
@@ -1223,8 +1234,8 @@
                 {#if !hasTxProvider}
                   <span class="field-description">
                     {isWindows
-                      ? 'Choose an API provider and enter your key to enable transcription.'
-                      : 'Uses macOS on-device speech recognition. Choose an API provider only if you want cloud transcription.'}
+                      ? 'Choose an API provider to enable transcription.'
+                      : 'Uses macOS on-device speech recognition. Choose an API provider for more accurate transcription.'}
                   </span>
                 {/if}
               </div>
@@ -1236,7 +1247,7 @@
                     <option value={language.value}>{language.label}</option>
                   {/each}
                 </select>
-                <span class="field-description">Auto-detect works best for most people. Choose a language when recognition needs a hint.</span>
+                <span class="field-description">Use auto-detect, or choose a language to improve recognition.</span>
               </div>
 
               {#if hasTxProvider}
@@ -1283,7 +1294,7 @@
                     bind:value={txModel}
                   />
                   <span class="field-description">
-                    Leave empty to use the default ({txDefaultModels[txProvider] ?? 'none'}).
+                    Override the default model, or leave empty to use {txDefaultModels[txProvider] ?? 'none'}.
                   </span>
                 </div>
 
@@ -1293,7 +1304,7 @@
                   <div class="toggle-row">
                     <div class="toggle-info">
                       <span class="toggle-label">Smart Format</span>
-                      <span class="toggle-description">Auto-formats numbers, dates, currencies, and adds punctuation</span>
+                      <span class="toggle-description">Format numbers, dates, currencies, and punctuation.</span>
                     </div>
                     <label class="toggle-switch">
                       <input type="checkbox" bind:checked={dgSmartFormat} />
@@ -1325,7 +1336,7 @@
                       placeholder="e.g. The speaker discusses SwiftUI and Xcode"
                       bind:value={oaiPrompt}
                     />
-                    <span class="field-description">Guide the model with context -- useful for domain-specific terms, names, or jargon it might mishear.</span>
+                    <span class="field-description">Add context for names, terms, or jargon that may be misheard.</span>
                   </div>
                 {/if}
 
@@ -1365,7 +1376,7 @@
                   {/each}
                 </select>
                 {#if !hasFmtProvider}
-                  <span class="field-description">Raw transcription will be pasted as-is.</span>
+                  <span class="field-description">Paste the raw transcription without cleanup.</span>
                 {/if}
               </div>
 
@@ -1421,7 +1432,7 @@
                     bind:value={fmtModel}
                   />
                   <span class="field-description">
-                    Leave empty to use the default ({fmtDefaultModels[fmtProvider] ?? 'none'}).
+                    Override the default model, or leave empty to use {fmtDefaultModels[fmtProvider] ?? 'none'}.
                   </span>
                 </div>
 
@@ -1473,7 +1484,7 @@
               <div class="toggle-row">
                 <div class="toggle-info">
                   <span class="toggle-label">Save transcription history</span>
-                  <span class="toggle-description">Keep recent transcripts available for review and reuse</span>
+                  <span class="toggle-description">Keep a local history of recent transcripts.</span>
                 </div>
                 <label class="toggle-switch">
                   <input type="checkbox" bind:checked={historyEnabled} />
@@ -1514,7 +1525,7 @@
               {:else if historyEntries.length === 0}
                 <div class="history-empty-state">
                   <span class="history-empty-title">No transcriptions yet</span>
-                  <span class="field-description">Your saved transcriptions will appear here.</span>
+                  <span class="field-description">Recent transcripts will appear here.</span>
                 </div>
               {:else}
                 <div class="settings-history-list" aria-label="Saved transcriptions">
@@ -1618,20 +1629,8 @@
 
               <div class="action-row">
                 <div class="field-copy">
-                  <span class="field-label">Onboarding</span>
-                  <span class="field-description">Show setup prompts again the next time Yap needs them.</span>
-                </div>
-                <button class="btn btn-secondary" onclick={resetOnboarding} type="button">
-                  Reset Onboarding
-                </button>
-              </div>
-
-              <div class="field-divider"></div>
-
-              <div class="action-row">
-                <div class="field-copy">
                   <span class="field-label">Default settings</span>
-                  <span class="field-description">Restore every setting in this window and turn off Start with system.</span>
+                  <span class="field-description">Restore Yap’s default settings.</span>
                 </div>
                 <button class="btn btn-secondary" onclick={resetDefaults} type="button">
                   Reset Defaults

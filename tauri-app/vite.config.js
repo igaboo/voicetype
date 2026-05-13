@@ -3,8 +3,32 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { sveltekit } from "@sveltejs/kit/vite";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { execSync } from "node:child_process";
 
 const host = process.env.TAURI_DEV_HOST;
+const packageJson = JSON.parse(readFileSync(resolve("package.json"), "utf-8"));
+
+/**
+ * @param {string} command
+ * @param {string} fallback
+ */
+function commandOutput(command, fallback) {
+  try {
+    return execSync(command, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim() || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+const gitCommit = commandOutput("git rev-parse HEAD", "unknown");
+const gitCommitShort = commandOutput("git rev-parse --short HEAD", "unknown");
+const githubCommitUrl =
+  gitCommit === "unknown" ? "https://github.com/oobagi/yap" : `https://github.com/oobagi/yap/commit/${gitCommit}`;
+const appBuildMetadata = {
+  __APP_VERSION__: JSON.stringify(packageJson.version),
+  __GIT_COMMIT_SHORT__: JSON.stringify(gitCommitShort),
+  __GITHUB_COMMIT_URL__: JSON.stringify(githubCommitUrl),
+};
 
 /** Standalone HTML pages used by Tauri windows (not SvelteKit routes). */
 const standalonePages = ["settings"];
@@ -69,6 +93,7 @@ function tauriMultiWindow() {
         // output filenames don't include the "src/" prefix.
         root: resolve("src"),
         plugins: [svelte()],
+        define: appBuildMetadata,
         build: {
           rollupOptions: { input },
           outDir: resolve("build"),
@@ -88,6 +113,7 @@ function tauriMultiWindow() {
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [sveltekit(), tauriMultiWindow()],
+  define: appBuildMetadata,
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

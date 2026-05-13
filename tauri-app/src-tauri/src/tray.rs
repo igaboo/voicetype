@@ -15,7 +15,7 @@ use crate::windows;
 ///   ----
 ///   Enabled          (check item)
 ///   History >        (submenu with recent entries)
-///   Open Yap...
+///   Open Settings
 ///   ----
 ///   Quit
 pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
@@ -34,7 +34,7 @@ pub fn setup_tray(app: &AppHandle) -> Result<(), String> {
     // History submenu
     let history_submenu = build_history_submenu(app)?;
 
-    let settings_item = MenuItemBuilder::with_id("settings", "Open Yap...")
+    let settings_item = MenuItemBuilder::with_id("settings", "Open Settings")
         .build(app)
         .map_err(|e| format!("failed to create settings item: {e}"))?;
 
@@ -195,7 +195,7 @@ pub fn refresh_history_menu(app: &AppHandle) {
             let enabled_item = CheckMenuItemBuilder::with_id("toggle_enabled", "Enabled")
                 .checked(true)
                 .build(app);
-            let settings_item = MenuItemBuilder::with_id("settings", "Open Yap...").build(app);
+            let settings_item = MenuItemBuilder::with_id("settings", "Open Settings").build(app);
             let updates_item =
                 MenuItemBuilder::with_id("updates", "Check for Updates...").build(app);
             let quit_item = MenuItemBuilder::with_id("quit", "Quit").build(app);

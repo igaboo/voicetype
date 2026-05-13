@@ -41,12 +41,6 @@ fn save_config(cfg: AppConfig, orch: tauri::State<'_, Arc<Orchestrator>>) -> Res
     Ok(())
 }
 
-/// Reset onboarding and show the first onboarding prompt immediately.
-#[tauri::command]
-fn reset_onboarding(orch: tauri::State<'_, Arc<Orchestrator>>) -> Result<(), String> {
-    orch.reset_onboarding()
-}
-
 /// List available audio input devices.
 #[tauri::command]
 fn list_audio_devices() -> Vec<String> {
@@ -144,7 +138,6 @@ pub fn run() {
             // Config
             get_config,
             save_config,
-            reset_onboarding,
             list_audio_devices,
             // History
             get_history,
