@@ -354,7 +354,7 @@ impl OrchestratorInner {
                     crate::sidecar::send(&crate::sidecar::OutMessage::Permission {
                         title: "Enable Accessibility".to_string(),
                         message: format!(
-                            "Yap needs Accessibility to listen for {} while other apps are focused.",
+                            "Yap needs Accessibility for {}. If it keeps showing, remove Yap with the minus button, then enable it again.",
                             self.hotkey_label
                         ),
                         action_label: "Open System Settings".to_string(),

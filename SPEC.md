@@ -16,7 +16,7 @@ This document is the single source of truth for feature parity in the Tauri-base
 | macOS bundle ID | `com.yap.desktop` |
 | Windows app ID | `com.yap.desktop` |
 | Version scheme | SemVer: `MAJOR.MINOR.PATCH` |
-| Current version | `2.3.2` |
+| Current version | `2.3.4` |
 | Activation policy | **Background/accessory** -- no Dock icon (macOS `LSUIElement = true`), no taskbar window (Windows: tray-only) |
 
 ---
