@@ -502,29 +502,29 @@ impl Orchestrator {
 
     #[cfg(target_os = "macos")]
     fn finish_permission_granted(&self, prompt: PermissionPromptKind) {
-        match prompt {
+        let restart_after_grant = match prompt {
             PermissionPromptKind::Accessibility => {
-                log::info("Accessibility granted; restarting hotkey listener");
+                log::info("Accessibility granted; restarting app to refresh event tap trust");
                 hotkey::stop();
-                let cfg = config::get();
-                let spec = parse_hotkey_spec(&cfg.hotkey);
-                let app = self.app_handle();
-                let orch = app.state::<Arc<Orchestrator>>();
-                start_hotkey_listener(Arc::clone(&orch), spec);
+                true
             }
-        }
+        };
 
-        let mut inner = self.inner.lock().unwrap();
-        inner.permission_prompt = None;
-        inner.permission_poll_pending = false;
-        inner.emit_permission_prompt();
-        inner.emit_state();
+        {
+            let mut inner = self.inner.lock().unwrap();
+            inner.permission_prompt = None;
+            inner.permission_poll_pending = false;
+            inner.emit_permission_prompt();
+            inner.emit_state();
 
-        if !inner.onboarding_complete {
-            if inner.onboarding_step.is_none() {
+            if !inner.onboarding_complete && inner.onboarding_step.is_none() {
                 inner.onboarding_step = Some(OnboardingStep::TryIt);
             }
             inner.emit_onboarding();
+        }
+
+        if restart_after_grant {
+            self.app_handle().request_restart();
         }
     }
 
