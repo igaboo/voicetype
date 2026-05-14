@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -19,6 +19,9 @@ const SOUND_START_PRESS: &str = "Blow";
 const SOUND_HANDS_FREE: &str = "HandsFree";
 const SOUND_NEXT: &str = "Pop";
 const SOUND_SKIP: &str = "Skip";
+const SHORT_TAP_TIP_GRACE: Duration =
+    Duration::from_millis((hotkey::DOUBLE_TAP_WINDOW * 1000.0) as u64 + 100);
+const HOLD_TO_RECORD_DELAY: Duration = Duration::from_millis(250);
 const PRE_RECORDING_CUE_DELAY: Duration = Duration::from_millis(220);
 const SILENCE_PEAK_THRESHOLD: f32 = 0.15;
 const ONBOARDING_HOLD_CONFIRM_DELAY: Duration = Duration::from_millis(600);
@@ -26,7 +29,9 @@ const ONBOARDING_HOLD_CONFIRM_DELAY: Duration = Duration::from_millis(600);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RuntimeState {
     Idle,
+    PressPending,
     Recording,
+    TapPending,
     Paused,
     Processing,
 }
@@ -70,6 +75,8 @@ static ONBOARDING_HOLD_STARTED_AT: once_cell::sync::Lazy<Mutex<Option<Instant>>>
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 static HANDS_FREE_RECORDING: once_cell::sync::Lazy<Mutex<bool>> =
     once_cell::sync::Lazy::new(|| Mutex::new(false));
+static IGNORE_PENDING_KEY_UP: AtomicBool = AtomicBool::new(false);
+static RECORDING_GENERATION: AtomicU64 = AtomicU64::new(0);
 static HOST: once_cell::sync::Lazy<Mutex<Option<Arc<dyn DictationHost>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 static LEVEL_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
@@ -152,15 +159,22 @@ fn reset_active_runtime() {
     if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
         *active_hands_free = false;
     }
+    IGNORE_PENDING_KEY_UP.store(false, Ordering::SeqCst);
+    RECORDING_GENERATION.fetch_add(1, Ordering::SeqCst);
 }
 
 fn on_key_down() {
+    if matches!(state(), RuntimeState::Recording | RuntimeState::Paused)
+        && is_hands_free_recording()
+    {
+        stop_and_process();
+        return;
+    }
+
     if let Some(step) = onboarding_step() {
         match step {
             OnboardingStep::TryIt => {
-                if begin_recording(false) {
-                    advance_onboarding_step(OnboardingStep::DoubleTapTip);
-                }
+                let _ = begin_press_to_record();
             }
             OnboardingStep::ApiTip | OnboardingStep::FormattingTip | OnboardingStep::Welcome => {
                 start_onboarding_hold(step);
@@ -170,22 +184,86 @@ fn on_key_down() {
         return;
     }
 
-    let _ = begin_recording(false);
+    if matches!(state(), RuntimeState::Idle) {
+        let _ = begin_press_to_record();
+    }
 }
 
-fn begin_recording(hands_free: bool) -> bool {
+fn begin_press_to_record() -> bool {
     if !matches!(state(), RuntimeState::Idle) {
+        return false;
+    }
+
+    let generation = next_recording_generation();
+    if let Ok(mut peak) = PEAK_LEVEL.lock() {
+        *peak = 0.0;
+    }
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = Some(Instant::now());
+    }
+    if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+        *active_hands_free = false;
+    }
+    IGNORE_PENDING_KEY_UP.store(false, Ordering::SeqCst);
+    set_state(RuntimeState::PressPending);
+    play_sound(SOUND_START_PRESS);
+
+    std::thread::Builder::new()
+        .name("yap-core-hold-to-record-delay".into())
+        .spawn(move || {
+            std::thread::sleep(HOLD_TO_RECORD_DELAY);
+            if state() != RuntimeState::PressPending || current_recording_generation() != generation
+            {
+                return;
+            }
+            let _ = start_recording_for_generation(generation, false);
+        })
+        .ok();
+
+    true
+}
+
+fn begin_hands_free_recording(ignore_pending_key_up: bool) -> bool {
+    if !matches!(
+        state(),
+        RuntimeState::Idle | RuntimeState::PressPending | RuntimeState::TapPending
+    ) {
+        return false;
+    }
+
+    let generation = next_recording_generation();
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = Some(Instant::now());
+    }
+    if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+        *active_hands_free = true;
+    }
+    if let Ok(mut peak) = PEAK_LEVEL.lock() {
+        *peak = 0.0;
+    }
+    IGNORE_PENDING_KEY_UP.store(ignore_pending_key_up, Ordering::SeqCst);
+    set_state(RuntimeState::Recording);
+    play_recording_cue(SOUND_HANDS_FREE);
+    start_recording_for_generation(generation, true)
+}
+
+fn start_recording_for_generation(generation: u64, hands_free: bool) -> bool {
+    if current_recording_generation() != generation {
+        return false;
+    }
+
+    let expected_state = if hands_free {
+        RuntimeState::Recording
+    } else {
+        RuntimeState::PressPending
+    };
+    if state() != expected_state {
         return false;
     }
 
     let cfg = config::get();
     let device = cfg.audio_device.trim();
     audio_ducking::begin(cfg.background_audio_mode());
-    play_recording_cue(if hands_free {
-        SOUND_HANDS_FREE
-    } else {
-        SOUND_START_PRESS
-    });
 
     match audio::start_recording((!device.is_empty()).then_some(device)) {
         Ok(_) => {
@@ -199,6 +277,18 @@ fn begin_recording(hands_free: bool) -> bool {
                 *peak = 0.0;
             }
             set_state(RuntimeState::Recording);
+            complete_onboarding_recording_action(
+                if hands_free {
+                    OnboardingStep::DoubleTapTip
+                } else {
+                    OnboardingStep::TryIt
+                },
+                if hands_free {
+                    OnboardingStep::ClickTip
+                } else {
+                    OnboardingStep::DoubleTapTip
+                },
+            );
             true
         }
         Err(error) => {
@@ -220,18 +310,31 @@ fn on_key_up() {
         return;
     }
 
-    if !matches!(state(), RuntimeState::Recording) || is_hands_free_recording() {
+    if state() == RuntimeState::PressPending {
+        begin_tap_pending("quick tap", true);
+        return;
+    }
+
+    if is_hands_free_recording() {
+        IGNORE_PENDING_KEY_UP.store(false, Ordering::SeqCst);
+        return;
+    }
+
+    if !matches!(state(), RuntimeState::Recording) {
         return;
     }
 
     let started_at = RECORDING_STARTED_AT.lock().ok().and_then(|guard| *guard);
-    if started_at.is_some_and(|started| started.elapsed().as_millis() < 250) {
+    let peak = current_peak_level();
+    if started_at.is_some_and(|started| started.elapsed().as_millis() < 500)
+        && peak < SILENCE_PEAK_THRESHOLD
+    {
         if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
             *started_at = None;
         }
         let _ = audio::stop_recording();
         audio_ducking::end();
-        set_state(RuntimeState::Idle);
+        begin_tap_pending("too short / quiet", false);
         return;
     }
 
@@ -239,14 +342,25 @@ fn on_key_up() {
 }
 
 fn on_double_tap() {
-    if matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
-        stop_and_process();
-    } else if let Some(step) = onboarding_step() {
-        if step == OnboardingStep::DoubleTapTip && begin_recording(true) {
-            advance_onboarding_step(OnboardingStep::ClickTip);
+    if let Some(step) = onboarding_step() {
+        if step != OnboardingStep::DoubleTapTip {
+            return;
         }
-    } else {
-        let _ = begin_recording(true);
+    }
+
+    match state() {
+        RuntimeState::Recording if !is_hands_free_recording() => {
+            if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+                *active_hands_free = true;
+            }
+            IGNORE_PENDING_KEY_UP.store(true, Ordering::SeqCst);
+            set_state(RuntimeState::Recording);
+            play_sound(SOUND_HANDS_FREE);
+        }
+        RuntimeState::Idle | RuntimeState::PressPending | RuntimeState::TapPending => {
+            let _ = begin_hands_free_recording(true);
+        }
+        _ => {}
     }
 }
 
@@ -254,15 +368,26 @@ fn on_overlay_pill_click() {
     match state() {
         RuntimeState::Idle => {
             if let Some(step) = onboarding_step() {
-                if step == OnboardingStep::ClickTip && begin_recording(true) {
+                if step == OnboardingStep::ClickTip && begin_hands_free_recording(false) {
                     advance_onboarding_step(OnboardingStep::ApiTip);
                 }
             } else {
-                let _ = begin_recording(true);
+                let _ = begin_hands_free_recording(false);
             }
         }
-        RuntimeState::Recording | RuntimeState::Paused => stop_and_process(),
-        RuntimeState::Processing => {}
+        RuntimeState::Recording if !is_hands_free_recording() => {
+            if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+                *active_hands_free = true;
+            }
+            IGNORE_PENDING_KEY_UP.store(true, Ordering::SeqCst);
+            set_state(RuntimeState::Recording);
+            play_sound(SOUND_HANDS_FREE);
+        }
+        RuntimeState::PressPending
+        | RuntimeState::TapPending
+        | RuntimeState::Recording
+        | RuntimeState::Paused
+        | RuntimeState::Processing => {}
     }
 }
 
@@ -284,6 +409,38 @@ fn on_overlay_stop() {
     if matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
         stop_and_process();
     }
+}
+
+fn next_recording_generation() -> u64 {
+    RECORDING_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
+
+fn current_recording_generation() -> u64 {
+    RECORDING_GENERATION.load(Ordering::SeqCst)
+}
+
+fn begin_tap_pending(reason: &'static str, play_skip_sound: bool) {
+    let generation = current_recording_generation();
+    if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+        *active_hands_free = false;
+    }
+    IGNORE_PENDING_KEY_UP.store(false, Ordering::SeqCst);
+    set_state(RuntimeState::TapPending);
+
+    std::thread::Builder::new()
+        .name("yap-core-tap-pending-grace".into())
+        .spawn(move || {
+            std::thread::sleep(SHORT_TAP_TIP_GRACE);
+            if state() != RuntimeState::TapPending || current_recording_generation() != generation {
+                return;
+            }
+            if play_skip_sound {
+                play_sound(SOUND_SKIP);
+            }
+            emit("dictation:skipped", json!({ "reason": reason }));
+            set_state(RuntimeState::Idle);
+        })
+        .ok();
 }
 
 fn start_onboarding_if_needed(cfg: &AppConfig) {
@@ -308,6 +465,12 @@ fn set_onboarding_step(step: Option<OnboardingStep>) {
 fn advance_onboarding_step(next: OnboardingStep) {
     play_sound(SOUND_NEXT);
     set_onboarding_step(Some(next));
+}
+
+fn complete_onboarding_recording_action(expected: OnboardingStep, next: OnboardingStep) {
+    if onboarding_step() == Some(expected) {
+        advance_onboarding_step(next);
+    }
 }
 
 fn start_onboarding_hold(step: OnboardingStep) {
@@ -596,6 +759,13 @@ fn set_state(next: RuntimeState) {
         if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
             *active_hands_free = false;
         }
+        if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+            *started_at = None;
+        }
+        if let Ok(mut peak) = PEAK_LEVEL.lock() {
+            *peak = 0.0;
+        }
+        IGNORE_PENDING_KEY_UP.store(false, Ordering::SeqCst);
     }
 
     if let Ok(mut state) = RUNTIME.lock() {
@@ -604,6 +774,7 @@ fn set_state(next: RuntimeState) {
 
     let state = match next {
         RuntimeState::Idle => "idle",
+        RuntimeState::PressPending | RuntimeState::TapPending => "pending",
         RuntimeState::Recording => "recording",
         RuntimeState::Paused => "paused",
         RuntimeState::Processing => "processing",
@@ -983,6 +1154,7 @@ fn recording_elapsed_seconds() -> f64 {
 fn state_label(state: RuntimeState) -> &'static str {
     match state {
         RuntimeState::Idle => "idle",
+        RuntimeState::PressPending | RuntimeState::TapPending => "pending",
         RuntimeState::Recording => "recording",
         RuntimeState::Paused => "paused",
         RuntimeState::Processing => "processing",
