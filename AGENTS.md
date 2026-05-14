@@ -75,3 +75,7 @@ Empty model strings fall back to provider defaults. Formatting falls back to the
 - Keep cross-platform behavior in the Rust orchestrator where possible.
 - Use platform-specific code only for OS integration: hotkeys, overlay behavior, paste, speech, bundling, and permissions.
 - macOS on-device transcription is implemented; Windows on-device transcription currently returns unavailable, so Windows needs an API transcription provider.
+
+## Repo Skills
+
+- `.codex/skills/yap-release-bump/` - use this bundled skill when preparing Yap version bumps or releases. It exists to keep releases on branch/PR flow, split changes into feature-grouped commits, choose the semantic version from the update contents, and produce GitHub Release notes that match older Yap releases.

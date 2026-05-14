@@ -1,0 +1,4 @@
+interface:
+  display_name: "Yap Release Bump"
+  short_description: "Ship Yap releases with clean PR notes"
+  default_prompt: "Use $yap-release-bump to prepare a clean Yap release from the current changes."
