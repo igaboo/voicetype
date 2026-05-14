@@ -1,12 +1,27 @@
 use once_cell::sync::Lazy;
 use std::sync::Mutex;
 
+use crate::config::BackgroundAudioMode;
 use crate::orchestrator::log;
 
-static ACTIVE_SESSION: Lazy<Mutex<Option<platform::Session>>> = Lazy::new(|| Mutex::new(None));
+static ACTIVE_SESSION: Lazy<Mutex<Option<Session>>> = Lazy::new(|| Mutex::new(None));
 
-pub fn begin(enabled: bool) {
-    if !enabled {
+enum Session {
+    Mute(platform::Session),
+    Pause(media::Session),
+}
+
+impl Session {
+    fn end(self) -> Result<(), String> {
+        match self {
+            Self::Mute(session) => session.end(),
+            Self::Pause(session) => session.end(),
+        }
+    }
+}
+
+pub fn begin(mode: BackgroundAudioMode) {
+    if mode == BackgroundAudioMode::Off {
         end();
         return;
     }
@@ -20,7 +35,13 @@ pub fn begin(enabled: bool) {
         return;
     }
 
-    match platform::Session::begin() {
+    let session = match mode {
+        BackgroundAudioMode::Off => unreachable!(),
+        BackgroundAudioMode::Mute => platform::Session::begin().map(Session::Mute),
+        BackgroundAudioMode::Pause => media::Session::begin().map(Session::Pause),
+    };
+
+    match session {
         Ok(session) => {
             *guard = Some(session);
         }
@@ -39,6 +60,39 @@ pub fn end() {
         if let Err(e) = session.end() {
             log::info(&format!("Audio ducking restore failed: {e}"));
         }
+    }
+}
+
+mod media {
+    use super::log;
+
+    pub struct Session {
+        toggled: bool,
+    }
+
+    impl Session {
+        pub fn begin() -> Result<Self, String> {
+            send_play_pause()?;
+            log::info("Background audio: sent media pause");
+            Ok(Self { toggled: true })
+        }
+
+        pub fn end(self) -> Result<(), String> {
+            if self.toggled {
+                send_play_pause()?;
+                log::info("Background audio: sent media resume");
+            }
+            Ok(())
+        }
+    }
+
+    fn send_play_pause() -> Result<(), String> {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+        let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::MediaPlayPause, Direction::Click)
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -244,7 +298,7 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::log;
-    use std::ptr;
+    use std::collections::HashMap;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::mpsc;
     use std::sync::Arc;
@@ -252,16 +306,17 @@ mod platform {
     use std::time::Duration;
 
     use windows::core::Interface;
-    use windows::Win32::Foundation::{BOOL, RPC_E_CHANGED_MODE, S_FALSE, S_OK};
+    use windows::Win32::Foundation::{RPC_E_CHANGED_MODE, S_FALSE, S_OK};
     use windows::Win32::Media::Audio::{
-        eCapture, eCommunications, eConsole, AudioCategory_Communications, AudioClientProperties,
-        IAudioCaptureClient, IAudioClient, IAudioClient2, IMMDeviceEnumerator, MMDeviceEnumerator,
-        AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMOPTIONS_NONE, DEVICE_STATE_ACTIVE,
+        eConsole, eRender, IAudioSessionControl2, IAudioSessionManager2, IMMDeviceEnumerator,
+        ISimpleAudioVolume, MMDeviceEnumerator,
     };
     use windows::Win32::System::Com::{
         CoCreateInstance, CoInitializeEx, CoTaskMemFree, CoUninitialize, CLSCTX_ALL,
         COINIT_MULTITHREADED,
     };
+
+    const MUTED_VOLUME: f32 = 0.0;
 
     pub struct Session {
         stop: Arc<AtomicBool>,
@@ -277,7 +332,7 @@ mod platform {
             let thread = std::thread::Builder::new()
                 .name("yap-audio-ducking".into())
                 .spawn(move || {
-                    let result = run_communications_capture(thread_stop, ready_tx);
+                    let result = run_session_ducker(thread_stop, ready_tx);
                     if let Err(e) = result {
                         log::info(&format!("Audio ducking worker stopped: {e}"));
                     }
@@ -286,7 +341,7 @@ mod platform {
 
             match ready_rx.recv_timeout(Duration::from_secs(2)) {
                 Ok(Ok(())) => {
-                    log::info("Audio ducking: started Windows communications session");
+                    log::info("Audio ducking: lowered Windows audio sessions");
                     Ok(Self {
                         stop,
                         thread: Some(thread),
@@ -310,12 +365,18 @@ mod platform {
             if let Some(thread) = self.thread.take() {
                 let _ = thread.join();
             }
-            log::info("Audio ducking: stopped Windows communications session");
+            log::info("Audio ducking: restored Windows audio sessions");
             Ok(())
         }
     }
 
-    fn run_communications_capture(
+    struct DuckedSession {
+        volume: ISimpleAudioVolume,
+        previous_volume: f32,
+        applied_volume: f32,
+    }
+
+    fn run_session_ducker(
         stop: Arc<AtomicBool>,
         ready_tx: mpsc::Sender<Result<(), String>>,
     ) -> Result<(), String> {
@@ -333,7 +394,7 @@ mod platform {
         }
 
         let startup_tx = ready_tx.clone();
-        let result = unsafe { run_communications_capture_inner(stop, startup_tx) };
+        let result = unsafe { run_session_ducker_inner(stop, startup_tx) };
         if let Err(e) = &result {
             let _ = ready_tx.send(Err(e.clone()));
         }
@@ -345,7 +406,7 @@ mod platform {
         result
     }
 
-    unsafe fn run_communications_capture_inner(
+    unsafe fn run_session_ducker_inner(
         stop: Arc<AtomicBool>,
         ready_tx: mpsc::Sender<Result<(), String>>,
     ) -> Result<(), String> {
@@ -353,80 +414,120 @@ mod platform {
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .map_err(|e| format!("failed to create audio device enumerator: {e}"))?;
         let device = enumerator
-            .GetDefaultAudioEndpoint(eCapture, eCommunications)
-            .or_else(|_| enumerator.GetDefaultAudioEndpoint(eCapture, eConsole))
-            .map_err(|e| format!("failed to get default capture device: {e}"))?;
-        let state = device
-            .GetState()
-            .map_err(|e| format!("failed to read communications capture device state: {e}"))?;
-        if state != DEVICE_STATE_ACTIVE {
-            return Err("default communications capture device is not active".to_string());
-        }
-
-        let client: IAudioClient2 = device
+            .GetDefaultAudioEndpoint(eRender, eConsole)
+            .map_err(|e| format!("failed to get default render device: {e}"))?;
+        let manager: IAudioSessionManager2 = device
             .Activate(CLSCTX_ALL, None)
-            .map_err(|e| format!("failed to activate communications audio client: {e}"))?;
-        let properties = AudioClientProperties {
-            cbSize: std::mem::size_of::<AudioClientProperties>() as u32,
-            bIsOffload: BOOL(0),
-            eCategory: AudioCategory_Communications,
-            Options: AUDCLNT_STREAMOPTIONS_NONE,
-        };
-        client
-            .SetClientProperties(&properties)
-            .map_err(|e| format!("failed to mark stream as communications audio: {e}"))?;
+            .map_err(|e| format!("failed to activate audio session manager: {e}"))?;
 
-        let base_client: IAudioClient = client.cast().map_err(|e| {
-            format!("failed to cast communications audio client to IAudioClient: {e}")
-        })?;
-        let mix_format = base_client
-            .GetMixFormat()
-            .map_err(|e| format!("failed to read communications mix format: {e}"))?;
-
-        let init_result =
-            base_client.Initialize(AUDCLNT_SHAREMODE_SHARED, 0, 1_000_000, 0, mix_format, None);
-        CoTaskMemFree(Some(mix_format.cast()));
-        init_result.map_err(|e| format!("failed to initialize communications stream: {e}"))?;
-
-        let capture: IAudioCaptureClient = base_client
-            .GetService()
-            .map_err(|e| format!("failed to get communications capture service: {e}"))?;
-        base_client
-            .Start()
-            .map_err(|e| format!("failed to start communications stream: {e}"))?;
-
+        let mut ducked = HashMap::<String, DuckedSession>::new();
+        duck_output_sessions(&manager, &mut ducked);
         let _ = ready_tx.send(Ok(()));
 
         while !stop.load(Ordering::SeqCst) {
-            drain_capture_packets(&capture)?;
-            std::thread::sleep(Duration::from_millis(10));
+            duck_output_sessions(&manager, &mut ducked);
+            std::thread::sleep(Duration::from_millis(250));
         }
 
-        let _ = base_client.Stop();
+        restore_output_sessions(ducked);
         Ok(())
     }
 
-    unsafe fn drain_capture_packets(capture: &IAudioCaptureClient) -> Result<(), String> {
-        let mut next_packet = capture
-            .GetNextPacketSize()
-            .map_err(|e| format!("failed to read communications packet size: {e}"))?;
+    unsafe fn duck_output_sessions(
+        manager: &IAudioSessionManager2,
+        ducked: &mut HashMap<String, DuckedSession>,
+    ) {
+        let enumerator = match manager.GetSessionEnumerator() {
+            Ok(enumerator) => enumerator,
+            Err(e) => {
+                log::info(&format!("Audio ducking: failed to enumerate sessions: {e}"));
+                return;
+            }
+        };
+        let count = match enumerator.GetCount() {
+            Ok(count) => count,
+            Err(e) => {
+                log::info(&format!("Audio ducking: failed to count sessions: {e}"));
+                return;
+            }
+        };
+        let own_pid = std::process::id();
 
-        while next_packet > 0 {
-            let mut data = ptr::null_mut();
-            let mut frames = 0;
-            let mut flags = 0;
-            capture
-                .GetBuffer(&mut data, &mut frames, &mut flags, None, None)
-                .map_err(|e| format!("failed to read communications packet: {e}"))?;
-            capture
-                .ReleaseBuffer(frames)
-                .map_err(|e| format!("failed to release communications packet: {e}"))?;
-            next_packet = capture
-                .GetNextPacketSize()
-                .map_err(|e| format!("failed to read communications packet size: {e}"))?;
+        for index in 0..count {
+            let control = match enumerator.GetSession(index) {
+                Ok(control) => control,
+                Err(_) => continue,
+            };
+            let control2 = match control.cast::<IAudioSessionControl2>() {
+                Ok(control2) => control2,
+                Err(_) => continue,
+            };
+            if control2.GetProcessId().ok() == Some(own_pid) {
+                continue;
+            }
+
+            let key = session_key(&control2, index);
+            if ducked.contains_key(&key) {
+                continue;
+            }
+
+            let volume = match control.cast::<ISimpleAudioVolume>() {
+                Ok(volume) => volume,
+                Err(_) => continue,
+            };
+            let previous_volume = match volume.GetMasterVolume() {
+                Ok(previous_volume) => previous_volume,
+                Err(_) => continue,
+            };
+            let ducked_volume = previous_volume.min(MUTED_VOLUME);
+            if (previous_volume - ducked_volume).abs() < f32::EPSILON {
+                continue;
+            }
+            if volume
+                .SetMasterVolume(ducked_volume, std::ptr::null())
+                .is_err()
+            {
+                continue;
+            }
+
+            ducked.insert(
+                key,
+                DuckedSession {
+                    volume,
+                    previous_volume,
+                    applied_volume: ducked_volume,
+                },
+            );
         }
+    }
 
-        Ok(())
+    unsafe fn restore_output_sessions(ducked: HashMap<String, DuckedSession>) {
+        for session in ducked.into_values() {
+            let current_volume = session
+                .volume
+                .GetMasterVolume()
+                .unwrap_or(session.applied_volume);
+            if (current_volume - session.applied_volume).abs() < 0.001 {
+                let _ = session
+                    .volume
+                    .SetMasterVolume(session.previous_volume, std::ptr::null());
+            }
+        }
+    }
+
+    unsafe fn session_key(control: &IAudioSessionControl2, fallback_index: i32) -> String {
+        match control.GetSessionInstanceIdentifier() {
+            Ok(identifier) => {
+                let text = identifier.to_string().unwrap_or_default();
+                CoTaskMemFree(Some(identifier.0.cast()));
+                if text.is_empty() {
+                    format!("session-index:{fallback_index}")
+                } else {
+                    text
+                }
+            }
+            Err(_) => format!("session-index:{fallback_index}"),
+        }
     }
 }
 

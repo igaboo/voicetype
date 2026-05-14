@@ -122,6 +122,8 @@ pub fn run() {
             // audio level poller.
             let handle = app.handle().clone();
             handle.plugin(tauri_plugin_updater::Builder::new().build())?;
+            set_windows_window_icons(&handle);
+            windows::style_app_windows(&handle);
             orchestrator::init(&handle);
             windows::hide_app_if_no_windows_visible(&handle);
 
@@ -152,3 +154,15 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(target_os = "windows")]
+fn set_windows_window_icons(app: &tauri::AppHandle) {
+    if let Ok(icon) = tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png")) {
+        if let Some(window) = app.get_webview_window("settings") {
+            let _ = window.set_icon(icon);
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn set_windows_window_icons(_app: &tauri::AppHandle) {}

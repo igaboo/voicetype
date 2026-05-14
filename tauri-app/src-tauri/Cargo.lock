@@ -6962,7 +6962,7 @@ checksum = "b9cc00251562a284751c9973bace760d86c0276c471b4be569fe6b068ee97a56"
 
 [[package]]
 name = "yap"
-version = "2.3.4"
+version = "2.4.0"
 dependencies = [
  "arboard",
  "base64 0.22.1",
@@ -6978,6 +6978,7 @@ dependencies = [
  "hound",
  "objc2 0.6.4",
  "once_cell",
+ "raw-window-handle",
  "reqwest 0.12.28",
  "rodio",
  "rustfft",

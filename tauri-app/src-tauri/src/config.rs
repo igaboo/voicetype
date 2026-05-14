@@ -6,6 +6,20 @@ use std::sync::Mutex;
 use crate::formatting::{FormattingProvider, FormattingStyle};
 use crate::transcription::TranscriptionProvider;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BackgroundAudioMode {
+    Off,
+    Mute,
+    Pause,
+}
+
+impl Default for BackgroundAudioMode {
+    fn default() -> Self {
+        Self::Mute
+    }
+}
+
 /// Full app configuration, plus serde defaults for each persisted field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -91,6 +105,12 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub quiet_audio_while_recording: bool,
 
+    /// How Yap should handle background audio while recording.
+    /// `None` means this config predates the mode setting; fall back to
+    /// quiet_audio_while_recording for migration.
+    #[serde(default)]
+    pub background_audio_mode: Option<BackgroundAudioMode>,
+
     /// Show the animated gradient background on the overlay
     #[serde(default = "default_true")]
     pub gradient_enabled: bool,
@@ -117,6 +137,22 @@ impl AppConfig {
         } else {
             self.speech_locale.clone()
         }
+    }
+
+    pub fn background_audio_mode(&self) -> BackgroundAudioMode {
+        self.background_audio_mode.unwrap_or_else(|| {
+            if self.quiet_audio_while_recording {
+                BackgroundAudioMode::Mute
+            } else {
+                BackgroundAudioMode::Off
+            }
+        })
+    }
+
+    fn normalize_derived_fields(&mut self) {
+        let mode = self.background_audio_mode();
+        self.background_audio_mode = Some(mode);
+        self.quiet_audio_while_recording = mode != BackgroundAudioMode::Off;
     }
 }
 
@@ -159,6 +195,7 @@ impl Default for AppConfig {
             el_language_code: String::new(),
             sounds_enabled: true,
             quiet_audio_while_recording: true,
+            background_audio_mode: Some(BackgroundAudioMode::Mute),
             gradient_enabled: true,
             always_visible_pill: true,
             history_enabled: true,
@@ -218,6 +255,9 @@ pub fn load() -> Result<AppConfig, String> {
         config
     };
 
+    let mut config = config;
+    config.normalize_derived_fields();
+
     // Update global state.
     if let Ok(mut guard) = CONFIG.lock() {
         *guard = config.clone();
@@ -228,10 +268,12 @@ pub fn load() -> Result<AppConfig, String> {
 
 /// Persist the given config to disk and update global state.
 pub fn save(config: &AppConfig) -> Result<(), String> {
-    save_to_disk(config)?;
+    let mut config = config.clone();
+    config.normalize_derived_fields();
+    save_to_disk(&config)?;
 
     if let Ok(mut guard) = CONFIG.lock() {
-        *guard = config.clone();
+        *guard = config;
     }
 
     Ok(())

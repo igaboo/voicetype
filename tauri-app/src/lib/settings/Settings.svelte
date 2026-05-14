@@ -44,6 +44,7 @@
     elLanguageCode: string;
     soundsEnabled: boolean;
     quietAudioWhileRecording: boolean;
+    backgroundAudioMode?: BackgroundAudioMode;
     gradientEnabled: boolean;
     alwaysVisiblePill: boolean;
     historyEnabled: boolean;
@@ -146,6 +147,7 @@
 
   type SectionId = 'general' | 'transcription' | 'formatting' | 'history' | 'advanced';
   type UpdateStatus = 'idle' | 'checking' | 'available' | 'upToDate' | 'downloading' | 'ready' | 'error';
+  type BackgroundAudioMode = 'off' | 'mute' | 'pause';
 
   const settingsSections: Array<{ id: SectionId; label: string; description: string }> = [
     { id: 'general', label: 'General', description: 'Hotkey, microphone, and app behavior' },
@@ -153,6 +155,12 @@
     { id: 'formatting', label: 'Formatting', description: 'Formatting provider and model' },
     { id: 'history', label: 'History', description: 'Recent transcript history' },
     { id: 'advanced', label: 'Advanced', description: 'Updates and defaults' },
+  ];
+
+  const backgroundAudioModes: Array<{ value: BackgroundAudioMode; label: string }> = [
+    { value: 'off', label: 'Off' },
+    { value: 'mute', label: 'Mute' },
+    { value: 'pause', label: 'Pause' },
   ];
 
   // ── State ─────────────────────────────────────────────────────────────
@@ -194,7 +202,7 @@
 
   // Behavior
   let soundsEnabled = $state(true);
-  let quietAudioWhileRecording = $state(true);
+  let backgroundAudioMode = $state<BackgroundAudioMode>('mute');
   let gradientEnabled = $state(true);
   let alwaysVisiblePill = $state(true);
   let startWithSystem = $state(false);
@@ -316,13 +324,14 @@
       oaiPrompt = cfg.oaiPrompt;
       geminiTemperature = cfg.geminiTemperature;
       soundsEnabled = cfg.soundsEnabled;
-      quietAudioWhileRecording = cfg.quietAudioWhileRecording ?? true;
+      backgroundAudioMode = cfg.backgroundAudioMode ?? ((cfg.quietAudioWhileRecording ?? true) ? 'mute' : 'off');
       gradientEnabled = cfg.gradientEnabled;
       alwaysVisiblePill = cfg.alwaysVisiblePill;
       historyEnabled = cfg.historyEnabled;
 
       // Determine if formatting shares the transcription key
       fmtUseSameKey = cfg.fmtApiKey === '' || cfg.fmtApiKey === cfg.txApiKey;
+      savedConfigSnapshot = configSnapshot();
     } catch (e) {
       console.error('Failed to load config:', e);
     }
@@ -339,6 +348,12 @@
 
     loading = false;
     configReady = true;
+  }
+
+  async function refreshConfig() {
+    const wasLoading = loading;
+    await loadConfig();
+    loading = wasLoading;
   }
 
   // ── Save Config ───────────────────────────────────────────────────────
@@ -366,7 +381,8 @@
       geminiTemperature,
       elLanguageCode: language.providerCode,
       soundsEnabled,
-      quietAudioWhileRecording,
+      quietAudioWhileRecording: backgroundAudioMode !== 'off',
+      backgroundAudioMode,
       gradientEnabled,
       alwaysVisiblePill,
       historyEnabled,
@@ -376,18 +392,27 @@
 
   async function persistConfig() {
     if (!isTauriRuntime) return;
+    const snapshot = configSnapshot();
+    if (snapshot === savedConfigSnapshot) return;
 
     try {
       await invoke('save_config', { cfg: currentConfig() });
+      savedConfigSnapshot = snapshot;
     } catch (e) {
       console.error('Failed to save config:', e);
     }
   }
 
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
+  let savedConfigSnapshot = '';
+
+  function configSnapshot() {
+    return JSON.stringify(currentConfig());
+  }
 
   function scheduleSave() {
     if (!isTauriRuntime || !configReady || loading) return;
+    if (configSnapshot() === savedConfigSnapshot) return;
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       void persistConfig();
@@ -412,7 +437,7 @@
     oaiPrompt;
     geminiTemperature;
     soundsEnabled;
-    quietAudioWhileRecording;
+    backgroundAudioMode;
     gradientEnabled;
     alwaysVisiblePill;
     historyEnabled;
@@ -919,7 +944,7 @@
     oaiPrompt = '';
     geminiTemperature = 0;
     soundsEnabled = true;
-    quietAudioWhileRecording = true;
+    backgroundAudioMode = 'mute';
     gradientEnabled = true;
     alwaysVisiblePill = true;
     startWithSystem = false;
@@ -939,6 +964,7 @@
   let unlistenFocus: (() => void) | undefined;
   let unlistenHotkeyPreview: (() => void) | undefined;
   let unlistenHotkeyCapture: (() => void) | undefined;
+  let unlistenShowSection: (() => void) | undefined;
   let unlistenShowHistory: (() => void) | undefined;
   let unlistenShowUpdates: (() => void) | undefined;
   let unlistenHistoryCleared: (() => void) | undefined;
@@ -947,8 +973,7 @@
     getCurrentWindow()
       .onFocusChanged(({ payload: focused }) => {
         if (focused) {
-          loading = true;
-          loadConfig();
+          void refreshConfig();
           if (activeSection === 'history' || historyLoadStarted) {
             void loadHistory();
           }
@@ -978,6 +1003,19 @@
       })
       .then((fn) => {
         unlistenHotkeyCapture = fn;
+      });
+
+    getCurrentWindow()
+      .listen<SectionId>('settings:show-section', ({ payload }) => {
+        if (settingsSections.some((section) => section.id === payload)) {
+          activeSection = payload;
+          if (payload === 'history') {
+            void loadHistory();
+          }
+        }
+      })
+      .then((fn) => {
+        unlistenShowSection = fn;
       });
 
     getCurrentWindow()
@@ -1013,6 +1051,7 @@
     unlistenFocus?.();
     unlistenHotkeyPreview?.();
     unlistenHotkeyCapture?.();
+    unlistenShowSection?.();
     unlistenShowHistory?.();
     unlistenShowUpdates?.();
     unlistenHistoryCleared?.();
@@ -1178,16 +1217,19 @@
 
               <div class="field-divider"></div>
 
-              <div class="toggle-row">
-                <div class="toggle-info">
-                  <span class="toggle-label">Quiet background audio</span>
-                  <span class="toggle-description">Mute other apps while recording.</span>
+              <div class="field-row split">
+                <div class="field-copy">
+                  <span class="field-label">Background audio</span>
+                  <span class="field-description">Choose what happens to other media while recording.</span>
                 </div>
-                <label class="toggle-switch">
-                  <input type="checkbox" bind:checked={quietAudioWhileRecording} />
-                  <span class="toggle-track"></span>
-                  <span class="toggle-thumb"></span>
-                </label>
+                <div class="segmented-control" role="radiogroup" aria-label="Background audio">
+                  {#each backgroundAudioModes as mode}
+                    <label class="segment-option">
+                      <input type="radio" bind:group={backgroundAudioMode} value={mode.value} />
+                      <span>{mode.label}</span>
+                    </label>
+                  {/each}
+                </div>
               </div>
 
               <div class="field-divider"></div>

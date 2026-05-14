@@ -11,18 +11,17 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{self, AudioLevels};
 use crate::audio_ducking;
-use crate::config::{self, AppConfig};
+use crate::config::{self, AppConfig, BackgroundAudioMode};
 use crate::formatting::{self, FormattingOptions, FormattingProvider};
 use crate::history;
 use crate::hotkey::{self, HotkeySpec};
 use crate::paste;
 use crate::transcription::{self, TranscriptionOptions, TranscriptionProvider};
 use crate::tray;
-use crate::windows;
 
 const SHORT_TAP_TIP_GRACE: Duration =
     Duration::from_millis((hotkey::DOUBLE_TAP_WINDOW * 1000.0) as u64 + 100);
@@ -1245,7 +1244,7 @@ impl Orchestrator {
             inner.state = AppState::Idle;
             inner.emit_error("Choose an API provider in Settings");
             drop(inner);
-            let _ = windows::show_app_window(&app, "settings");
+            show_settings_section(&app, "transcription");
             return;
         }
 
@@ -1257,8 +1256,7 @@ impl Orchestrator {
             inner.state = AppState::Idle;
             inner.emit_error("Set up an API key in Settings");
             drop(inner);
-            // Auto-open settings window
-            let _ = windows::show_app_window(&app, "settings");
+            show_settings_section(&app, "transcription");
             return;
         }
 
@@ -1326,12 +1324,17 @@ impl Orchestrator {
                         orch.skip_and_minimize(&format!("{e} -- skipping"), false);
                         return;
                     }
+                    let settings_section = provider_settings_section_for_error(&e);
                     // Set internal state to idle but show error to frontend.
                     // Frontend auto-dismisses the error back to idle after 2s.
                     let mut inner = orch.inner.lock().unwrap();
+                    let app = inner.app.clone();
                     inner.state = AppState::Idle;
                     inner.emit_error(&classify_error(&e));
                     drop(inner);
+                    if let Some(section) = settings_section {
+                        show_settings_section(&app, section);
+                    }
                     // After error auto-dismisses, restore onboarding
                     let orch2 = Arc::clone(&orch);
                     std::thread::spawn(move || {
@@ -1354,7 +1357,7 @@ fn start_configured_recording() -> Result<PathBuf, String> {
 
     // Quiet background audio before opening the microphone so the first
     // recorded samples do not include whatever was playing behind Yap.
-    audio_ducking::begin(cfg.quiet_audio_while_recording);
+    audio_ducking::begin(cfg.background_audio_mode());
 
     match audio::start_recording((!device.is_empty()).then_some(device)) {
         Ok(path) => Ok(path),
@@ -1494,6 +1497,35 @@ fn is_no_speech_error(error: &str) -> bool {
     lower.contains("no speech") || lower.contains("no transcription")
 }
 
+fn provider_settings_section_for_error(error: &str) -> Option<&'static str> {
+    let lower = error.to_lowercase();
+    let is_provider_settings_error = lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("authentication")
+        || lower.contains("authorization")
+        || lower.contains("invalid api key")
+        || lower.contains("api key invalid")
+        || lower.contains("missing api key")
+        || lower.contains("invalid token");
+
+    if !is_provider_settings_error {
+        return None;
+    }
+
+    if lower.contains("format") {
+        Some("formatting")
+    } else {
+        Some("transcription")
+    }
+}
+
+fn show_settings_section(app: &AppHandle, section: &str) {
+    let _ = crate::windows::show_app_window(app, "settings");
+    let _ = app.emit_to("settings", "settings:show-section", section);
+}
+
 // ---------------------------------------------------------------------------
 // Sound effects
 // ---------------------------------------------------------------------------
@@ -1508,7 +1540,7 @@ fn play_pre_recording_sound(app: &AppHandle, name: &str) {
 }
 
 fn play_recording_transition_sound(app: &AppHandle, name: &str) {
-    if config::get().quiet_audio_while_recording {
+    if config::get().background_audio_mode() == BackgroundAudioMode::Mute {
         return;
     }
 
