@@ -62,7 +62,9 @@
 
   // ── Provider Metadata ─────────────────────────────────────────────────
 
-  const isWindows = navigator.userAgent.toLowerCase().includes('windows');
+  const userAgent = navigator.userAgent.toLowerCase();
+  const isWindows = userAgent.includes('windows');
+  const isMac = userAgent.includes('macintosh') || userAgent.includes('mac os');
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const defaultHotkey = isWindows ? 'capslock' : 'fn';
   const defaultTxProvider = isWindows ? 'openai' : 'none';
@@ -456,17 +458,6 @@
     }
     if (isTauriRuntime) {
       await invoke('hide_app_window', { label: 'settings' });
-    }
-  }
-
-  async function startWindowDrag(e: MouseEvent) {
-    if (!isTauriRuntime || e.button !== 0) return;
-    e.preventDefault();
-
-    try {
-      await getCurrentWindow().startDragging();
-    } catch (error) {
-      console.error('Failed to start window drag:', error);
     }
   }
 
@@ -1072,51 +1063,47 @@
     <span>Loading...</span>
   </div>
 {:else}
-  <div class="settings-container">
-    <div
-      class="settings-drag-region"
-      data-tauri-drag-region
-      aria-hidden="true"
-      onmousedown={startWindowDrag}
-    ></div>
-    <aside class="settings-sidebar" aria-label="Settings sections">
-      <div class="sidebar-header">
-        <img class="app-icon" src="/favicon.png" alt="" aria-hidden="true" />
-        <div>
-          <div class="sidebar-title">Yap</div>
-          <a
-            class="sidebar-subtitle sidebar-version-link"
-            href={buildUrl}
-            onclick={openBuildLink}
-            target="_blank"
-            rel="noreferrer"
-            title="Open this build on GitHub"
-          >
-            {buildLabel}
-          </a>
+  <div class="settings-container" class:platform-macos={isMac}>
+    <div class="settings-titlebar" data-tauri-drag-region aria-hidden="true"></div>
+    <div class="settings-body">
+      <aside class="settings-sidebar" aria-label="Settings sections">
+        <div class="sidebar-header">
+          <img class="app-icon" src="/favicon.png" alt="" aria-hidden="true" />
+          <div>
+            <div class="sidebar-title">Yap</div>
+            <a
+              class="sidebar-subtitle sidebar-version-link"
+              href={buildUrl}
+              onclick={openBuildLink}
+              target="_blank"
+              rel="noreferrer"
+              title="Open this build on GitHub"
+            >
+              {buildLabel}
+            </a>
+          </div>
         </div>
-      </div>
 
-      <nav class="section-nav">
-        {#each settingsSections as section}
-          <button
-            class="section-nav-item"
-            class:active={activeSection === section.id}
-            type="button"
-            aria-current={activeSection === section.id ? 'page' : undefined}
-            aria-controls={'settings-panel-' + section.id}
-            onclick={() => selectSection(section.id)}
-          >
-            <span class="section-nav-label">{section.label}</span>
-            <span class="section-nav-description">{section.description}</span>
-          </button>
-        {/each}
-      </nav>
+        <nav class="section-nav">
+          {#each settingsSections as section}
+            <button
+              class="section-nav-item"
+              class:active={activeSection === section.id}
+              type="button"
+              aria-current={activeSection === section.id ? 'page' : undefined}
+              aria-controls={'settings-panel-' + section.id}
+              onclick={() => selectSection(section.id)}
+            >
+              <span class="section-nav-label">{section.label}</span>
+              <span class="section-nav-description">{section.description}</span>
+            </button>
+          {/each}
+        </nav>
 
-    </aside>
+      </aside>
 
-    <div class="settings-main">
-      <main class="settings-content" id={'settings-panel-' + activeSection}>
+      <div class="settings-main">
+        <main class="settings-content" id={'settings-panel-' + activeSection}>
         {#if activeSection === 'general'}
           <section class="settings-section" aria-label="General settings">
             <div class="section-body">
@@ -1681,7 +1668,8 @@
             </div>
           </section>
         {/if}
-      </main>
+        </main>
+      </div>
     </div>
   </div>
 {/if}
