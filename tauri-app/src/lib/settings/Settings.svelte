@@ -62,7 +62,9 @@
 
   // ── Provider Metadata ─────────────────────────────────────────────────
 
-  const isWindows = navigator.userAgent.toLowerCase().includes('windows');
+  const userAgent = navigator.userAgent.toLowerCase();
+  const isWindows = userAgent.includes('windows');
+  const isMac = userAgent.includes('macintosh') || userAgent.includes('mac os');
   const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
   const defaultHotkey = isWindows ? 'capslock' : 'fn';
   const defaultTxProvider = isWindows ? 'openai' : 'none';
@@ -1072,7 +1074,7 @@
     <span>Loading...</span>
   </div>
 {:else}
-  <div class="settings-container">
+  <div class:platform-macos={isMac} class="settings-container">
     <div
       class="settings-drag-region"
       data-tauri-drag-region
