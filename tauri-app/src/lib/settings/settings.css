@@ -42,19 +42,11 @@ button {
   -webkit-app-region: no-drag;
 }
 
-.settings-drag-region {
-  position: fixed;
-  z-index: 10;
-  top: 0;
-  right: 0;
-  left: 0;
-  height: 42px;
-  app-region: drag;
-  -webkit-app-region: drag;
-}
-
 .settings-container {
+  --settings-titlebar-height: 24px;
+  --settings-window-top-padding: 24px;
   display: flex;
+  position: relative;
   width: 100%;
   height: 100vh;
   overflow: hidden;
@@ -64,6 +56,28 @@ button {
   font-size: 13px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+}
+
+.settings-container.platform-macos {
+  --settings-window-top-padding: 36px;
+}
+
+.settings-titlebar {
+  position: absolute;
+  z-index: 10;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: var(--settings-titlebar-height);
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+
+.settings-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
 }
 
 .loading-state {
@@ -80,7 +94,7 @@ button {
   flex: 0 0 236px;
   flex-direction: column;
   min-width: 0;
-  padding: 24px 12px 14px;
+  padding: var(--settings-window-top-padding) 12px 14px;
   border-right: 1px solid var(--settings-border);
 }
 
@@ -181,7 +195,7 @@ button {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  padding: 24px 32px 32px;
+  padding: var(--settings-window-top-padding) 32px 32px;
 }
 
 .settings-section {
