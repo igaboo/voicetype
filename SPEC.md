@@ -2,9 +2,9 @@
 
 **Version**: 1.0
 **Status**: Accepted
-**Applies to**: macOS and Windows Tauri app
+**Applies to**: macOS and Windows Electron app
 
-This document is the single source of truth for feature parity in the Tauri-based Yap app. Shared behavior should live in Rust/Svelte where possible; platform-specific behavior should be limited to OS integration such as hotkeys, overlays, paste simulation, speech permissions, and bundling.
+This document is the single source of truth for feature parity in the Electron-based Yap app. Shared behavior should live in Svelte and the Rust `yap-core` runtime where possible; platform-specific behavior should be limited to OS integration such as hotkeys, overlays, paste simulation, speech permissions, and bundling.
 
 ---
 
@@ -861,7 +861,7 @@ After `welcome` step is confirmed, set `onboardingComplete = true` and hide onbo
 
 ### Preloading
 
-Bundled sounds live under `tauri-app/src-tauri/sounds/` and are included as Tauri resources via `bundle.resources`.
+Bundled sounds live under `desktop/native-core/sounds/` and are included in Electron packages as extra resources.
 
 ### Timing
 
@@ -963,16 +963,19 @@ Boundary is a UUID string.
 
 ---
 
-## 20. Repository and Tauri Layout
+## 20. Repository and Electron Layout
 
-The canonical application package is `tauri-app/`.
+The canonical application package is `desktop/`.
 
 ```
-tauri-app/
+desktop/
   package.json
+  electron/
+    main/
+    preload/
+  electron-builder.yml
   src/
-  src-tauri/
-    tauri.conf.json
+  native-core/
     Cargo.toml
     src/
     sidecar-overlay/
@@ -980,4 +983,4 @@ tauri-app/
     sounds/
 ```
 
-This follows the standard Tauri shape inside the app package: JavaScript/Svelte files at the package root and the Rust project in `src-tauri/`. The repository root intentionally wraps that package so project docs and GitHub metadata can live outside the frontend package root.
+Electron owns the app shell, tray, windows, updater, packaging, and preload bridge. The Rust crate remains under `native-core/` and builds `yap-core`, the native runtime Electron launches for hotkeys, audio capture, overlays, transcription, formatting, history, and paste. The repository root intentionally wraps that package so project docs and GitHub metadata can live outside the app package root.

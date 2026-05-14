@@ -1,0 +1,44 @@
+appId: com.yap.desktop
+productName: Yap
+asar: true
+publish:
+  provider: github
+  owner: oobagi
+  repo: yap
+directories:
+  output: release-electron
+files:
+  - build/**/*
+  - dist-electron/**/*
+  - native-core/icons/tray.png
+  - package.json
+extraResources:
+  - from: native-core/target/release
+    to: bin
+    filter:
+      - yap-core
+      - yap-core.exe
+  - from: native-core/binaries
+    to: bin
+    filter:
+      - yap-overlay-*-apple-darwin
+  - from: native-core/sounds
+    to: sounds
+mac:
+  category: public.app-category.productivity
+  icon: native-core/icons/icon.icns
+  extendInfo:
+    NSMicrophoneUsageDescription: Yap records your voice so it can transcribe and paste what you say.
+    NSSpeechRecognitionUsageDescription: Yap uses speech recognition to transcribe audio locally when available.
+  target:
+    - dmg
+    - zip
+win:
+  icon: native-core/icons/icon.ico
+  target:
+    - nsis
+linux:
+  category: Utility
+  icon: native-core/icons
+  target:
+    - AppImage

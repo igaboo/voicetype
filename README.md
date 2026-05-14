@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="tauri-app/src-tauri/icons/icon.png" width="128" height="128" alt="Yap icon">
+  <img src="desktop/native-core/icons/icon.png" width="128" height="128" alt="Yap icon">
 </p>
 
 <h1 align="center">Yap</h1>
@@ -15,7 +15,7 @@
   &middot;
   <a href="https://github.com/oobagi/yap/issues">Issues</a>
   &middot;
-  <a href="https://github.com/oobagi/yap/actions/workflows/tauri-build.yml">Builds</a>
+  <a href="https://github.com/oobagi/yap/actions/workflows/electron-build.yml">Builds</a>
   &middot;
   <a href="https://github.com/oobagi/yap/blob/main/LICENSE">License</a>
 </p>
@@ -23,7 +23,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
   <img src="https://img.shields.io/badge/Windows-10%2B-blue" alt="Windows 10+">
-  <img src="https://img.shields.io/badge/Tauri-2-24c8db" alt="Tauri 2">
+  <img src="https://img.shields.io/badge/Electron-42-47848f" alt="Electron 42">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
 </p>
 
@@ -90,15 +90,15 @@ Most options can be changed from **Settings** in the tray/menu bar app.
 
 ```bash
 git clone https://github.com/oobagi/yap.git
-cd yap/tauri-app
+cd yap/desktop
 npm install
-npm run dev                 # frontend dev server
 npm run check               # Svelte/type checks
-npm run tauri -- dev        # run the desktop app in development
-npm run tauri -- build      # create app bundles/installers
+npm run electron:check      # Electron main/preload type checks
+npm run electron:dev        # run the Electron desktop app in development
+npm run electron:package    # create app bundles/installers
 ```
 
-macOS builds require Xcode Command Line Tools for the Swift/AppKit overlay sidecar. Windows builds require the standard Tauri Windows toolchain and WebView2 runtime support.
+macOS builds require Xcode Command Line Tools for the Swift/AppKit overlay sidecar. Windows builds require the standard Rust Windows/MSVC toolchain for the native `yap-core` runtime.
 
 ## License
 

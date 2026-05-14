@@ -1,0 +1,894 @@
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use serde_json::{json, Value};
+
+use crate::audio;
+use crate::audio_ducking;
+use crate::config::{self, AppConfig};
+use crate::formatting::{self, FormattingOptions, FormattingProvider};
+use crate::history;
+use crate::hotkey::{self, HotkeySpec};
+use crate::paste;
+use crate::transcription::{self, TranscriptionOptions, TranscriptionProvider};
+use crate::vad;
+
+const SOUND_START_PRESS: &str = "Blow";
+const SOUND_HANDS_FREE: &str = "HandsFree";
+const SOUND_NEXT: &str = "Pop";
+const SOUND_SKIP: &str = "Skip";
+const PRE_RECORDING_CUE_DELAY: Duration = Duration::from_millis(220);
+const SILENCE_PEAK_THRESHOLD: f32 = 0.15;
+const ONBOARDING_HOLD_CONFIRM_DELAY: Duration = Duration::from_millis(600);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuntimeState {
+    Idle,
+    Recording,
+    Paused,
+    Processing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OnboardingStep {
+    TryIt,
+    DoubleTapTip,
+    ClickTip,
+    ApiTip,
+    FormattingTip,
+    Welcome,
+}
+
+impl OnboardingStep {
+    fn to_str(self) -> &'static str {
+        match self {
+            Self::TryIt => "tryIt",
+            Self::DoubleTapTip => "doubleTapTip",
+            Self::ClickTip => "clickTip",
+            Self::ApiTip => "apiTip",
+            Self::FormattingTip => "formattingTip",
+            Self::Welcome => "welcome",
+        }
+    }
+}
+
+pub trait DictationHost: Send + Sync + 'static {
+    fn emit(&self, event: &'static str, payload: Value);
+}
+
+static RUNTIME: once_cell::sync::Lazy<Mutex<RuntimeState>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(RuntimeState::Idle));
+static RECORDING_STARTED_AT: once_cell::sync::Lazy<Mutex<Option<Instant>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static PEAK_LEVEL: once_cell::sync::Lazy<Mutex<f32>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(0.0));
+static ONBOARDING_STEP: once_cell::sync::Lazy<Mutex<Option<OnboardingStep>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static ONBOARDING_HOLD_STARTED_AT: once_cell::sync::Lazy<Mutex<Option<Instant>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static HANDS_FREE_RECORDING: once_cell::sync::Lazy<Mutex<bool>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(false));
+static HOST: once_cell::sync::Lazy<Mutex<Option<Arc<dyn DictationHost>>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static LEVEL_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
+static RUNNING: AtomicBool = AtomicBool::new(false);
+
+pub fn start(host: Arc<dyn DictationHost>) -> Result<(), String> {
+    let _ = config::load();
+    if let Ok(mut active_host) = HOST.lock() {
+        *active_host = Some(Arc::clone(&host));
+    }
+    reset_active_runtime();
+
+    hotkey::set_callbacks(on_key_down, on_key_up, on_double_tap);
+    hotkey::set_permission_required_callback(|label| {
+        emit_overlay_permission(
+            "Accessibility Required",
+            &format!("Allow Accessibility access to use the {label} hotkey anywhere."),
+            "Open Settings",
+            true,
+        );
+        emit(
+            "dictation:permission-required",
+            json!({
+                "permission": "accessibility",
+                "hotkeyLabel": label,
+            }),
+        );
+    });
+
+    let cfg = config::get();
+    let spec = HotkeySpec::parse(&cfg.hotkey);
+    hotkey::start(spec);
+    start_level_poller();
+    spawn_overlay(&cfg);
+    set_state(RuntimeState::Idle);
+    emit_overlay_permission("", "", "", false);
+    start_onboarding_if_needed(&cfg);
+    emit(
+        "dictation:runtime-started",
+        json!({
+            "hotkey": cfg.hotkey,
+        }),
+    );
+    RUNNING.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+pub fn stop() -> Result<(), String> {
+    reset_active_runtime();
+    set_state(RuntimeState::Idle);
+    set_onboarding_step(None);
+    stop_overlay();
+    emit("dictation:runtime-stopped", Value::Null);
+    if let Ok(mut host) = HOST.lock() {
+        *host = None;
+    }
+    RUNNING.store(false, Ordering::SeqCst);
+    Ok(())
+}
+
+pub fn is_running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
+
+fn reset_active_runtime() {
+    hotkey::stop();
+    if matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
+        let _ = audio::stop_recording();
+        audio_ducking::end();
+    }
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = None;
+    }
+    if let Ok(mut peak) = PEAK_LEVEL.lock() {
+        *peak = 0.0;
+    }
+    if let Ok(mut hold_started_at) = ONBOARDING_HOLD_STARTED_AT.lock() {
+        *hold_started_at = None;
+    }
+    if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+        *active_hands_free = false;
+    }
+}
+
+fn on_key_down() {
+    if let Some(step) = onboarding_step() {
+        match step {
+            OnboardingStep::TryIt => {
+                if begin_recording(false) {
+                    advance_onboarding_step(OnboardingStep::DoubleTapTip);
+                }
+            }
+            OnboardingStep::ApiTip | OnboardingStep::FormattingTip | OnboardingStep::Welcome => {
+                start_onboarding_hold(step);
+            }
+            OnboardingStep::DoubleTapTip | OnboardingStep::ClickTip => {}
+        }
+        return;
+    }
+
+    let _ = begin_recording(false);
+}
+
+fn begin_recording(hands_free: bool) -> bool {
+    if !matches!(state(), RuntimeState::Idle) {
+        return false;
+    }
+
+    let cfg = config::get();
+    let device = cfg.audio_device.trim();
+    audio_ducking::begin(cfg.background_audio_mode());
+    play_recording_cue(if hands_free {
+        SOUND_HANDS_FREE
+    } else {
+        SOUND_START_PRESS
+    });
+
+    match audio::start_recording((!device.is_empty()).then_some(device)) {
+        Ok(_) => {
+            if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+                *started_at = Some(Instant::now());
+            }
+            if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+                *active_hands_free = hands_free;
+            }
+            if let Ok(mut peak) = PEAK_LEVEL.lock() {
+                *peak = 0.0;
+            }
+            set_state(RuntimeState::Recording);
+            true
+        }
+        Err(error) => {
+            audio_ducking::end();
+            emit_error("Recording failed", error);
+            set_state(RuntimeState::Idle);
+            false
+        }
+    }
+}
+
+fn on_key_up() {
+    if ONBOARDING_HOLD_STARTED_AT
+        .lock()
+        .map(|hold| hold.is_some())
+        .unwrap_or(false)
+    {
+        clear_onboarding_hold();
+        return;
+    }
+
+    if !matches!(state(), RuntimeState::Recording) || is_hands_free_recording() {
+        return;
+    }
+
+    let started_at = RECORDING_STARTED_AT.lock().ok().and_then(|guard| *guard);
+    if started_at.is_some_and(|started| started.elapsed().as_millis() < 250) {
+        if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+            *started_at = None;
+        }
+        let _ = audio::stop_recording();
+        audio_ducking::end();
+        set_state(RuntimeState::Idle);
+        return;
+    }
+
+    stop_and_process();
+}
+
+fn on_double_tap() {
+    if matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
+        stop_and_process();
+    } else if let Some(step) = onboarding_step() {
+        if step == OnboardingStep::DoubleTapTip && begin_recording(true) {
+            advance_onboarding_step(OnboardingStep::ClickTip);
+        }
+    } else {
+        let _ = begin_recording(true);
+    }
+}
+
+fn on_overlay_pill_click() {
+    match state() {
+        RuntimeState::Idle => {
+            if let Some(step) = onboarding_step() {
+                if step == OnboardingStep::ClickTip && begin_recording(true) {
+                    advance_onboarding_step(OnboardingStep::ApiTip);
+                }
+            } else {
+                let _ = begin_recording(true);
+            }
+        }
+        RuntimeState::Recording | RuntimeState::Paused => stop_and_process(),
+        RuntimeState::Processing => {}
+    }
+}
+
+fn on_overlay_pause() {
+    match state() {
+        RuntimeState::Recording if is_hands_free_recording() => {
+            audio::pause_recording();
+            set_state(RuntimeState::Paused);
+        }
+        RuntimeState::Paused => {
+            audio::resume_recording();
+            set_state(RuntimeState::Recording);
+        }
+        _ => {}
+    }
+}
+
+fn on_overlay_stop() {
+    if matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
+        stop_and_process();
+    }
+}
+
+fn start_onboarding_if_needed(cfg: &AppConfig) {
+    if cfg.onboarding_complete {
+        set_onboarding_step(None);
+    } else {
+        set_onboarding_step(Some(OnboardingStep::TryIt));
+    }
+}
+
+fn onboarding_step() -> Option<OnboardingStep> {
+    ONBOARDING_STEP.lock().map(|step| *step).unwrap_or(None)
+}
+
+fn set_onboarding_step(step: Option<OnboardingStep>) {
+    if let Ok(mut active_step) = ONBOARDING_STEP.lock() {
+        *active_step = step;
+    }
+    emit_overlay_onboarding(step);
+}
+
+fn advance_onboarding_step(next: OnboardingStep) {
+    play_sound(SOUND_NEXT);
+    set_onboarding_step(Some(next));
+}
+
+fn start_onboarding_hold(step: OnboardingStep) {
+    if !matches!(
+        step,
+        OnboardingStep::ApiTip | OnboardingStep::FormattingTip | OnboardingStep::Welcome
+    ) {
+        return;
+    }
+
+    let started_at = Instant::now();
+    if let Ok(mut hold_started_at) = ONBOARDING_HOLD_STARTED_AT.lock() {
+        *hold_started_at = Some(started_at);
+    }
+    emit_overlay_onboarding_press(true);
+
+    std::thread::spawn(move || {
+        std::thread::sleep(ONBOARDING_HOLD_CONFIRM_DELAY);
+        let should_advance = ONBOARDING_HOLD_STARTED_AT
+            .lock()
+            .map(|hold_started_at| hold_started_at.is_some_and(|active| active == started_at))
+            .unwrap_or(false)
+            && onboarding_step() == Some(step);
+
+        if !should_advance {
+            return;
+        }
+
+        clear_onboarding_hold();
+        match step {
+            OnboardingStep::ApiTip => advance_onboarding_step(OnboardingStep::FormattingTip),
+            OnboardingStep::FormattingTip => advance_onboarding_step(OnboardingStep::Welcome),
+            OnboardingStep::Welcome => finalize_onboarding(),
+            _ => {}
+        }
+    });
+}
+
+fn clear_onboarding_hold() {
+    if let Ok(mut hold_started_at) = ONBOARDING_HOLD_STARTED_AT.lock() {
+        *hold_started_at = None;
+    }
+    emit_overlay_onboarding_press(false);
+}
+
+fn finalize_onboarding() {
+    let _ = config::update(|cfg| {
+        cfg.onboarding_complete = true;
+    });
+    set_onboarding_step(None);
+}
+
+fn stop_and_process() {
+    set_state(RuntimeState::Processing);
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = None;
+    }
+    let wav_path = match audio::stop_recording() {
+        Ok(path) => path,
+        Err(error) => {
+            audio_ducking::end();
+            emit_error("Recording failed", error);
+            set_state(RuntimeState::Idle);
+            return;
+        }
+    };
+    audio_ducking::end();
+    play_sound(SOUND_SKIP);
+    let peak = current_peak_level();
+
+    if peak < SILENCE_PEAK_THRESHOLD {
+        emit(
+            "dictation:skipped",
+            json!({
+                "reason": "silence",
+                "peak": peak,
+            }),
+        );
+        set_state(RuntimeState::Idle);
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("yap-core-process-audio".into())
+        .spawn(move || {
+            let cfg = config::get();
+            if !vad::pre_check(&wav_path) {
+                emit("dictation:skipped", json!({ "reason": "no speech" }));
+                set_state(RuntimeState::Idle);
+                return;
+            }
+
+            let result = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .map_err(|error| format!("failed to start async runtime: {error}"))
+                .and_then(|runtime| runtime.block_on(process_audio_pipeline(&wav_path, &cfg)));
+
+            match result {
+                Ok(text) if !text.trim().is_empty() => {
+                    let text = text.trim().to_string();
+                    if cfg.history_enabled {
+                        let _ = history::append(
+                            text.clone(),
+                            provider_name(&cfg.tx_provider),
+                            (cfg.fmt_provider != FormattingProvider::None)
+                                .then(|| provider_name(&cfg.fmt_provider)),
+                            (cfg.fmt_provider != FormattingProvider::None)
+                                .then(|| format!("{:?}", cfg.fmt_style).to_lowercase()),
+                        );
+                        emit("history:changed", Value::Null);
+                    }
+                    if let Err(error) = paste::paste_text(&text, cfg.press_enter_after_paste) {
+                        emit_error("Paste failed", error);
+                    } else {
+                        emit("dictation:pasted", json!({ "text": text }));
+                    }
+                }
+                Ok(_) => {
+                    emit(
+                        "dictation:skipped",
+                        json!({ "reason": "empty transcription" }),
+                    );
+                }
+                Err(error) => {
+                    emit_error("Processing failed", error);
+                }
+            }
+
+            set_state(RuntimeState::Idle);
+        })
+        .ok();
+}
+
+async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<String, String> {
+    if cfg!(not(target_os = "macos")) && cfg.tx_provider == TranscriptionProvider::None {
+        return Err("Choose an API provider in Settings".to_string());
+    }
+
+    if cfg.tx_provider != TranscriptionProvider::None && cfg.tx_api_key.is_empty() {
+        return Err("Set up an API key in Settings".to_string());
+    }
+
+    let tx_options = TranscriptionOptions {
+        api_key: cfg.tx_api_key.clone(),
+        model: cfg.tx_model.clone(),
+        dg_smart_format: cfg.dg_smart_format,
+        dg_keywords: cfg.dg_keywords.clone(),
+        dg_language: cfg.dg_language.clone(),
+        oai_language: cfg.oai_language.clone(),
+        oai_prompt: cfg.oai_prompt.clone(),
+        gemini_temperature: cfg.gemini_temperature,
+        el_language_code: cfg.el_language_code.clone(),
+    };
+
+    let use_oneshot = cfg.tx_provider == TranscriptionProvider::Gemini
+        && cfg.fmt_provider == FormattingProvider::Gemini
+        && cfg.tx_provider.can_also_format();
+
+    let raw_text = if use_oneshot {
+        transcription::transcribe_gemini_oneshot(wav_path, &tx_options, cfg.fmt_style).await?
+    } else {
+        transcription::transcribe(cfg.tx_provider, wav_path, &tx_options).await?
+    };
+
+    let trimmed = raw_text.trim().to_string();
+    if trimmed.is_empty() || use_oneshot {
+        return Ok(trimmed);
+    }
+
+    let fmt_api_key = if cfg.fmt_api_key.is_empty() {
+        cfg.tx_api_key.clone()
+    } else {
+        cfg.fmt_api_key.clone()
+    };
+
+    if cfg.fmt_provider == FormattingProvider::None || fmt_api_key.is_empty() {
+        return Ok(trimmed);
+    }
+
+    let fmt_options = FormattingOptions {
+        api_key: fmt_api_key,
+        model: cfg.fmt_model.clone(),
+        style: cfg.fmt_style,
+    };
+    formatting::format(cfg.fmt_provider, &trimmed, &fmt_options).await
+}
+
+fn provider_name<T: std::fmt::Debug>(provider: &T) -> String {
+    format!("{provider:?}").to_lowercase()
+}
+
+fn state() -> RuntimeState {
+    RUNTIME
+        .lock()
+        .map(|state| *state)
+        .unwrap_or(RuntimeState::Idle)
+}
+
+fn set_state(next: RuntimeState) {
+    if matches!(next, RuntimeState::Idle) {
+        if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
+            *active_hands_free = false;
+        }
+    }
+
+    if let Ok(mut state) = RUNTIME.lock() {
+        *state = next;
+    }
+
+    let state = match next {
+        RuntimeState::Idle => "idle",
+        RuntimeState::Recording => "recording",
+        RuntimeState::Paused => "paused",
+        RuntimeState::Processing => "processing",
+    };
+    let hands_free = is_hands_free_recording();
+    let paused = matches!(next, RuntimeState::Paused);
+    emit(
+        "dictation:state",
+        json!({
+            "state": state,
+            "handsFree": hands_free,
+            "paused": paused,
+        }),
+    );
+    emit_overlay_state(state.to_string(), hands_free, paused);
+}
+
+fn emit_error(title: &str, message: String) {
+    emit_overlay_error(&message);
+    emit(
+        "dictation:error",
+        json!({
+            "title": title,
+            "message": message,
+        }),
+    );
+}
+
+fn emit(event: &'static str, payload: Value) {
+    let host = HOST
+        .lock()
+        .ok()
+        .and_then(|active_host| active_host.as_ref().map(Arc::clone));
+    if let Some(host) = host {
+        host.emit(event, payload);
+    }
+}
+
+fn is_hands_free_recording() -> bool {
+    HANDS_FREE_RECORDING
+        .lock()
+        .map(|active_hands_free| *active_hands_free)
+        .unwrap_or(false)
+}
+
+fn start_level_poller() {
+    if LEVEL_POLLER_STARTED.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("yap-core-level-poller".into())
+        .spawn(move || loop {
+            std::thread::sleep(Duration::from_millis(33));
+            if !matches!(state(), RuntimeState::Recording | RuntimeState::Paused) {
+                continue;
+            }
+
+            let levels = audio::get_levels();
+            update_peak_level(levels.level);
+            emit(
+                "dictation:levels",
+                json!({
+                    "level": levels.level,
+                    "bars": levels.bars,
+                }),
+            );
+            emit_overlay_levels(levels.level, levels.bars.to_vec());
+        })
+        .ok();
+}
+
+fn update_peak_level(level: f32) {
+    if let Ok(mut peak) = PEAK_LEVEL.lock() {
+        *peak = peak.max(level);
+    }
+}
+
+fn current_peak_level() -> f32 {
+    PEAK_LEVEL.lock().map(|peak| *peak).unwrap_or(0.0)
+}
+
+fn play_recording_cue(name: &str) {
+    if !config::get().sounds_enabled {
+        return;
+    }
+    play_sound(name);
+    if name == SOUND_HANDS_FREE {
+        std::thread::sleep(PRE_RECORDING_CUE_DELAY);
+    }
+}
+
+fn play_sound(name: &str) {
+    if !config::get().sounds_enabled {
+        return;
+    }
+
+    let Some(path) = sound_path(name) else {
+        return;
+    };
+
+    std::thread::spawn(move || {
+        if let Ok((_stream, stream_handle)) = rodio::OutputStream::try_default() {
+            if let Ok(file) = std::fs::File::open(&path) {
+                let source = rodio::Decoder::new(std::io::BufReader::new(file));
+                if let Ok(source) = source {
+                    let _ = stream_handle.play_raw(rodio::source::Source::convert_samples(source));
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    });
+}
+
+fn sound_path(name: &str) -> Option<PathBuf> {
+    let file_name = format!("{name}.wav");
+    let manifest_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("sounds")
+        .join(&file_name);
+
+    let mut candidates = vec![manifest_path];
+    if let Ok(current_exe) = std::env::current_exe() {
+        if let Some(bin_dir) = current_exe.parent() {
+            candidates.push(bin_dir.join("sounds").join(&file_name));
+            if let Some(resource_dir) = bin_dir.parent() {
+                candidates.push(resource_dir.join("sounds").join(&file_name));
+            }
+        }
+    }
+
+    candidates.into_iter().find(|path| path.exists())
+}
+
+#[cfg(target_os = "macos")]
+fn spawn_overlay(cfg: &AppConfig) {
+    crate::sidecar::spawn_for_core(handle_overlay_event);
+    emit_overlay_config(cfg);
+}
+
+#[cfg(target_os = "windows")]
+fn spawn_overlay(cfg: &AppConfig) {
+    crate::win_overlay::spawn_for_core(|event| handle_overlay_event(event.to_string()));
+    emit_overlay_config(cfg);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn spawn_overlay(_cfg: &AppConfig) {}
+
+#[cfg(target_os = "macos")]
+fn stop_overlay() {
+    emit_overlay_state("idle".to_string(), false, false);
+    emit_overlay_levels(0.0, vec![0.0; 11]);
+    crate::sidecar::stop();
+}
+
+#[cfg(target_os = "windows")]
+fn stop_overlay() {
+    emit_overlay_state("idle".to_string(), false, false);
+    emit_overlay_levels(0.0, vec![0.0; 11]);
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn stop_overlay() {}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn handle_overlay_event(event: String) {
+    match event.as_str() {
+        "ready" => {
+            let cfg = config::get();
+            emit_overlay_config(&cfg);
+            emit_overlay_onboarding(onboarding_step());
+            emit_overlay_state(
+                state_label(state()).to_string(),
+                is_hands_free_recording(),
+                matches!(state(), RuntimeState::Paused),
+            );
+        }
+        "pill_click" => on_overlay_pill_click(),
+        #[cfg(target_os = "macos")]
+        "permission_action" => {
+            if hotkey::request_accessibility_permission() {
+                emit(
+                    "dictation:permission-requested",
+                    json!({ "permission": "accessibility" }),
+                );
+            }
+        }
+        "pause" => on_overlay_pause(),
+        "stop" => on_overlay_stop(),
+        _ => {}
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_config(cfg: &AppConfig) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::Config {
+        gradient_enabled: cfg.gradient_enabled,
+        always_visible: cfg.always_visible_pill,
+        hotkey_label: HotkeySpec::parse(&cfg.hotkey).label(),
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_config(cfg: &AppConfig) {
+    crate::win_overlay::update_state(|state| {
+        state.gradient_enabled = cfg.gradient_enabled;
+        state.always_visible = cfg.always_visible_pill;
+        state.hotkey_label = HotkeySpec::parse(&cfg.hotkey).label();
+    });
+}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_state(state: String, hands_free: bool, paused: bool) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::State {
+        state,
+        hands_free,
+        paused,
+        elapsed: recording_elapsed_seconds(),
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_state(state: String, hands_free: bool, paused: bool) {
+    crate::win_overlay::update_state(|overlay| {
+        overlay.mode = if paused {
+            "recording".to_string()
+        } else {
+            state
+        };
+        overlay.hands_free = hands_free;
+        overlay.paused = paused;
+        overlay.elapsed = recording_elapsed_seconds();
+        overlay.error = None;
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn emit_overlay_state(_state: String, _hands_free: bool, _paused: bool) {}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_levels(level: f32, bars: Vec<f32>) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::Levels { level, bars });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_levels(level: f32, bars: Vec<f32>) {
+    crate::win_overlay::update_state(|overlay| {
+        overlay.level = level;
+        if bars.len() == 11 {
+            overlay.bars.copy_from_slice(&bars);
+        }
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn emit_overlay_levels(_level: f32, _bars: Vec<f32>) {}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_error(message: &str) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::Error {
+        message: message.to_string(),
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_error(message: &str) {
+    crate::win_overlay::update_state(|overlay| {
+        overlay.mode = "error".to_string();
+        overlay.error = Some(message.to_string());
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn emit_overlay_error(_message: &str) {}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_onboarding(step: Option<OnboardingStep>) {
+    let cfg = config::get();
+    let hotkey_label = HotkeySpec::parse(&cfg.hotkey).label();
+    let (step, text) = match step {
+        Some(step) => (
+            step.to_str().to_string(),
+            onboarding_text(step, &hotkey_label),
+        ),
+        None => (String::new(), String::new()),
+    };
+
+    crate::sidecar::send(&crate::sidecar::OutMessage::Onboarding {
+        step,
+        text,
+        hotkey_label,
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_onboarding(step: Option<OnboardingStep>) {
+    crate::win_overlay::update_state(|overlay| {
+        overlay.onboarding_step =
+            step.and_then(|step| crate::win_overlay::OnboardingStep::from_str(step.to_str()));
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn emit_overlay_onboarding(_step: Option<OnboardingStep>) {}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_onboarding_press(pressed: bool) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::OnboardingPress { pressed });
+}
+
+#[cfg(target_os = "windows")]
+fn emit_overlay_onboarding_press(pressed: bool) {
+    crate::win_overlay::update_state(|overlay| {
+        overlay.is_pressed = pressed;
+    });
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn emit_overlay_onboarding_press(_pressed: bool) {}
+
+fn onboarding_text(step: OnboardingStep, hotkey_label: &str) -> String {
+    match step {
+        OnboardingStep::TryIt => {
+            format!("Hold <span class=\"keycap\">{hotkey_label}</span> to start recording")
+        }
+        OnboardingStep::DoubleTapTip => format!(
+            "Double-tap <span class=\"keycap\">{hotkey_label}</span> for hands-free recording"
+        ),
+        OnboardingStep::ClickTip => "Click the pill for hands-free recording".to_string(),
+        OnboardingStep::ApiTip => {
+            "Add an API key in the menu bar for better transcription".to_string()
+        }
+        OnboardingStep::FormattingTip => {
+            "Enable formatting in Settings to clean up grammar and punctuation automatically"
+                .to_string()
+        }
+        OnboardingStep::Welcome => "You're all set - enjoy!".to_string(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn emit_overlay_permission(title: &str, message: &str, action_label: &str, visible: bool) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::Permission {
+        title: title.to_string(),
+        message: message.to_string(),
+        action_label: action_label.to_string(),
+        visible,
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+fn emit_overlay_permission(_title: &str, _message: &str, _action_label: &str, _visible: bool) {}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn recording_elapsed_seconds() -> f64 {
+    RECORDING_STARTED_AT
+        .lock()
+        .ok()
+        .and_then(|started_at| *started_at)
+        .map(|started_at| started_at.elapsed().as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+fn state_label(state: RuntimeState) -> &'static str {
+    match state {
+        RuntimeState::Idle => "idle",
+        RuntimeState::Recording => "recording",
+        RuntimeState::Paused => "paused",
+        RuntimeState::Processing => "processing",
+    }
+}

@@ -40,7 +40,9 @@ Desktop.ini
 *.tmp
 *.bak
 
-# Tauri
-tauri-app/node_modules/
-tauri-app/.svelte-kit/
-tauri-app/src-tauri/target/
+# Electron desktop package
+desktop/node_modules/
+desktop/.svelte-kit/
+desktop/dist-electron/
+desktop/release-electron/
+desktop/native-core/target/

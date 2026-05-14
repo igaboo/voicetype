@@ -5,18 +5,19 @@ This file gives Codex and other coding agents repository context for Yap.
 ## Build & Run
 
 ```bash
-cd tauri-app
+cd desktop
 npm install
 npm run check
-npm run tauri -- dev
-npm run tauri -- build
+npm run electron:check
+npm run electron:dev
+npm run electron:package
 ```
 
 User installation should point to GitHub Releases first. These commands are for development and source builds.
 
-The canonical application lives in `tauri-app/`. The old root-level Swift package has been removed; Swift remains only as the macOS overlay sidecar under `tauri-app/src-tauri/sidecar-overlay/`.
+The canonical application lives in `desktop/`. Electron is the desktop shell. The old root-level Swift package has been removed; Swift remains only as the macOS overlay sidecar under `desktop/native-core/sidecar-overlay/`.
 
-Tauri project layout note: official Tauri scaffolds normally put `package.json`, `src/`, and `src-tauri/` in the same app package root. Yap follows that layout inside `tauri-app/`; the repository root is a wrapper for docs and repo-level metadata.
+Rust native code still lives under `desktop/native-core/` for continuity with the existing modules. Electron launches the `yap-core` binary from that crate over newline-delimited JSON-RPC.
 
 Runtime permissions:
 
@@ -38,22 +39,23 @@ Hotkey provider
 
 ## Key Paths
 
-- `tauri-app/src-tauri/src/main.rs` - Tauri binary entry point.
-- `tauri-app/src-tauri/src/lib.rs` - Tauri builder, commands, plugins, and setup.
-- `tauri-app/src-tauri/src/orchestrator.rs` - state machine and pipeline coordination.
-- `tauri-app/src-tauri/src/audio.rs` - CPAL audio capture, WAV writing, audio levels, and FFT bars.
-- `tauri-app/src-tauri/src/hotkey.rs` - global hotkey handling.
-- `tauri-app/src-tauri/src/transcription.rs` - Apple/on-device pre-checks and API transcription providers.
-- `tauri-app/src-tauri/src/formatting.rs` - LLM cleanup and style formatting.
-- `tauri-app/src-tauri/src/paste.rs` - clipboard write, paste simulation, and clipboard restore.
-- `tauri-app/src-tauri/src/tray.rs` - tray/menu bar icon and menu.
-- `tauri-app/src-tauri/src/win_overlay.rs` - Windows native overlay implementation.
-- `tauri-app/src-tauri/src/sidecar.rs` - macOS overlay sidecar process management.
-- `tauri-app/src-tauri/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS.
-- `tauri-app/src-tauri/sounds/` - bundled WAV sound effects.
-- `tauri-app/src-tauri/icons/` - app, Windows, macOS, and tray icons used by builds.
-- `tauri-app/src/lib/settings/` - Svelte settings UI, transcription history, and update checks.
-- `tauri-app/src/lib/overlay/` - Svelte overlay view used where needed.
+- `desktop/electron/` - Electron main process, preload bridge, tray, windows, IPC, updater, and native sidecar management.
+- `desktop/electron-builder.yml` - Electron bundle, native resource, and updater artifact configuration.
+- `desktop/native-core/src/yap_core.rs` - Electron native runtime entry point.
+- `desktop/native-core/src/commands.rs` - runtime command facade shared by Electron-side native commands.
+- `desktop/native-core/src/dictation.rs` - Electron-backed native state machine and pipeline coordination.
+- `desktop/native-core/src/audio.rs` - CPAL audio capture, WAV writing, audio levels, and FFT bars.
+- `desktop/native-core/src/hotkey.rs` - global hotkey handling.
+- `desktop/native-core/src/transcription.rs` - Apple/on-device pre-checks and API transcription providers.
+- `desktop/native-core/src/formatting.rs` - LLM cleanup and style formatting.
+- `desktop/native-core/src/paste.rs` - clipboard write, paste simulation, and clipboard restore.
+- `desktop/native-core/src/win_overlay.rs` - Windows native overlay implementation.
+- `desktop/native-core/src/sidecar.rs` - macOS overlay sidecar process management.
+- `desktop/native-core/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS.
+- `desktop/native-core/sounds/` - bundled WAV sound effects.
+- `desktop/native-core/icons/` - app, Windows, macOS, and tray icons used by builds.
+- `desktop/src/lib/settings/` - Svelte settings UI, transcription history, and update checks.
+- `desktop/src/lib/overlay/` - Svelte overlay view used where needed.
 
 ## Config
 
@@ -72,7 +74,7 @@ Empty model strings fall back to provider defaults. Formatting falls back to the
 
 ## Working Rules
 
-- Keep cross-platform behavior in the Rust orchestrator where possible.
+- Keep cross-platform behavior in the Rust `yap-core` command/dictation runtime where possible.
 - Use platform-specific code only for OS integration: hotkeys, overlay behavior, paste, speech, bundling, and permissions.
 - macOS on-device transcription is implemented; Windows on-device transcription currently returns unavailable, so Windows needs an API transcription provider.
 

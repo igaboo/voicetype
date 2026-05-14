@@ -4,19 +4,19 @@
 
 Update all of these for a release:
 
-- `tauri-app/package.json`
-- `tauri-app/package-lock.json`
-- `tauri-app/src-tauri/Cargo.toml`
-- `tauri-app/src-tauri/Cargo.lock`
-- `tauri-app/src-tauri/tauri.conf.json`
+- `desktop/package.json`
+- `desktop/package-lock.json`
+- `desktop/native-core/Cargo.toml`
+- `desktop/native-core/Cargo.lock`
+- `desktop/electron-builder.yml`
 - `SPEC.md`
 
 Prefer:
 
 ```bash
-cd tauri-app
+cd desktop
 npm version X.Y.Z --no-git-tag-version
-cargo check
+cargo check --manifest-path native-core/Cargo.toml --bin yap-core
 ```
 
 Then verify no stale app version remains, ignoring unrelated dependency versions.
@@ -61,9 +61,10 @@ Avoid vague bullets:
 
 ## Testing
 - [x] `npm run check`
-- [x] `cargo check`
+- [x] `npm run electron:check`
+- [x] `cargo check --manifest-path native-core/Cargo.toml --bin yap-core`
 - [x] `cargo fmt`
-- [x] `npm run build`
+- [x] `npm run electron:build`
 
 ## Release Notes Preview
 ## What's Changed
