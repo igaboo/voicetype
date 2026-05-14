@@ -433,7 +433,11 @@ fn stop_and_process() {
                     );
                 }
                 Err(error) => {
-                    emit_error("Processing failed", error);
+                    let settings_section = provider_settings_section_for_error(&error);
+                    emit_processing_error(error);
+                    if let Some(section) = settings_section {
+                        emit("settings:show-section", json!(section));
+                    }
                 }
             }
 
@@ -468,13 +472,25 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
         && cfg.tx_provider.can_also_format();
 
     let raw_text = if use_oneshot {
-        transcription::transcribe_gemini_oneshot(wav_path, &tx_options, cfg.fmt_style).await?
+        transcription::transcribe_gemini_oneshot(wav_path, &tx_options, cfg.fmt_style)
+            .await
+            .map_err(|error| format!("Transcription failed: {error}"))?
     } else {
-        transcription::transcribe(cfg.tx_provider, wav_path, &tx_options).await?
+        transcription::transcribe(cfg.tx_provider, wav_path, &tx_options)
+            .await
+            .map_err(|error| format!("Transcription failed: {error}"))?
     };
 
     let trimmed = raw_text.trim().to_string();
-    if trimmed.is_empty() || use_oneshot {
+    if trimmed.is_empty() {
+        return Ok(trimmed);
+    }
+
+    if is_prompt_regurgitation(&trimmed) {
+        return Ok(String::new());
+    }
+
+    if use_oneshot {
         return Ok(trimmed);
     }
 
@@ -484,8 +500,11 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
         cfg.fmt_api_key.clone()
     };
 
-    if cfg.fmt_provider == FormattingProvider::None || fmt_api_key.is_empty() {
+    if cfg.fmt_provider == FormattingProvider::None {
         return Ok(trimmed);
+    }
+    if fmt_api_key.is_empty() {
+        return Err("Set up a formatting API key in Settings".to_string());
     }
 
     let fmt_options = FormattingOptions {
@@ -493,11 +512,76 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
         model: cfg.fmt_model.clone(),
         style: cfg.fmt_style,
     };
-    formatting::format(cfg.fmt_provider, &trimmed, &fmt_options).await
+    let formatted = formatting::format(cfg.fmt_provider, &trimmed, &fmt_options)
+        .await
+        .map_err(|error| format!("Formatting failed: {error}"))?;
+    if is_prompt_regurgitation(&formatted) {
+        return Ok(trimmed);
+    }
+    Ok(formatted)
 }
 
 fn provider_name<T: std::fmt::Debug>(provider: &T) -> String {
     format!("{provider:?}").to_lowercase()
+}
+
+fn classify_error(error: &str) -> String {
+    let lower = error.to_lowercase();
+    if lower.contains("choose an api provider") {
+        "Choose an API provider in Settings".to_string()
+    } else if lower.contains("set up a formatting api key") {
+        "Set up a formatting API key in Settings".to_string()
+    } else if lower.contains("set up an api key") {
+        "Set up an API key in Settings".to_string()
+    } else if lower.contains("quota") || lower.contains("rate") || lower.contains("429") {
+        "Rate limited -- try again".to_string()
+    } else if is_provider_settings_error(&lower) {
+        "Invalid API key".to_string()
+    } else if lower.contains("timed out") || lower.contains("timeout") {
+        "Request timed out".to_string()
+    } else if lower.contains("offline") || lower.contains("network") || lower.contains("internet") {
+        "No internet connection".to_string()
+    } else {
+        "Something went wrong".to_string()
+    }
+}
+
+fn provider_settings_section_for_error(error: &str) -> Option<&'static str> {
+    let lower = error.to_lowercase();
+    if lower.contains("set up a formatting api key") {
+        return Some("formatting");
+    }
+    if lower.contains("choose an api provider") || lower.contains("set up an api key") {
+        return Some("transcription");
+    }
+    if !is_provider_settings_error(&lower) {
+        return None;
+    }
+    if lower.contains("format") {
+        Some("formatting")
+    } else {
+        Some("transcription")
+    }
+}
+
+fn is_provider_settings_error(lower: &str) -> bool {
+    lower.contains("401")
+        || lower.contains("403")
+        || lower.contains("unauthorized")
+        || lower.contains("forbidden")
+        || lower.contains("authentication")
+        || lower.contains("authorization")
+        || lower.contains("invalid api key")
+        || lower.contains("api key invalid")
+        || lower.contains("missing api key")
+        || lower.contains("invalid token")
+}
+
+fn is_prompt_regurgitation(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("transcribe this audio")
+        || lower.contains("respond with only a json")
+        || lower.contains("dictation commands")
 }
 
 fn state() -> RuntimeState {
@@ -544,6 +628,18 @@ fn emit_error(title: &str, message: String) {
         json!({
             "title": title,
             "message": message,
+        }),
+    );
+}
+
+fn emit_processing_error(error: String) {
+    let display_message = classify_error(&error);
+    emit_overlay_error(&display_message);
+    emit(
+        "dictation:error",
+        json!({
+            "title": display_message,
+            "message": error,
         }),
     );
 }

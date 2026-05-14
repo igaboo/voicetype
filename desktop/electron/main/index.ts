@@ -57,6 +57,12 @@ async function handleSidecarEvent({
     if (target === "tray") return;
   }
 
+  if (event === "settings:show-section") {
+    await showAppWindow("settings");
+    sendToWindow("settings", event, payload);
+    return;
+  }
+
   if (target === "main" || target === "settings") {
     sendToWindow(target, event, payload);
     return;
