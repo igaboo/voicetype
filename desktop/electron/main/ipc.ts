@@ -1,5 +1,5 @@
 import { app, dialog, ipcMain, shell, type WebContents } from "electron";
-import { autoUpdater } from "electron-updater";
+import electronUpdater from "electron-updater";
 import { loadConfig, saveConfig } from "./config";
 import { clearHistory, loadHistory, removeHistoryEntry } from "./history";
 import { cancelHotkeyCapture, startHotkeyCapture } from "./hotkeyCapture";
@@ -8,6 +8,8 @@ import { refreshHistoryMenu } from "./tray";
 import { hideAppWindow, showAppWindow, windowLabelFor, type WindowLabel } from "./windows";
 
 type InvokeArgs = Record<string, unknown>;
+
+const { autoUpdater } = electronUpdater;
 
 export function installIpcHandlers(sidecar: YapCoreSidecar): void {
   autoUpdater.autoDownload = false;
