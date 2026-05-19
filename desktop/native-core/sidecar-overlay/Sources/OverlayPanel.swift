@@ -64,12 +64,11 @@ final class OverlayHitPanel: NSPanel {
             return
         }
 
-        let frame = NSRect(
-            x: parent.frame.minX + region.minX,
-            y: parent.frame.minY + region.minY,
-            width: region.width,
-            height: region.height
-        )
+        if parent.childWindows?.contains(self) != true {
+            parent.addChildWindow(self, ordered: .above)
+        }
+
+        let frame = parent.convertToScreen(region)
         setFrame(frame, display: true)
         hitView.frame = NSRect(origin: .zero, size: frame.size)
         orderFrontRegardless()

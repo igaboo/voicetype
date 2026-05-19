@@ -8,6 +8,7 @@ static ACTIVE_SESSION: Lazy<Mutex<Option<Session>>> = Lazy::new(|| Mutex::new(No
 
 enum Session {
     Mute(platform::Session),
+    #[cfg(not(target_os = "macos"))]
     Pause(media::Session),
 }
 
@@ -15,6 +16,7 @@ impl Session {
     fn end(self) -> Result<(), String> {
         match self {
             Self::Mute(session) => session.end(),
+            #[cfg(not(target_os = "macos"))]
             Self::Pause(session) => session.end(),
         }
     }
@@ -38,7 +40,7 @@ pub fn begin(mode: BackgroundAudioMode) {
     let session = match mode {
         BackgroundAudioMode::Off => unreachable!(),
         BackgroundAudioMode::Mute => platform::Session::begin().map(Session::Mute),
-        BackgroundAudioMode::Pause => media::Session::begin().map(Session::Pause),
+        BackgroundAudioMode::Pause => begin_pause_session(),
     };
 
     match session {
@@ -63,6 +65,18 @@ pub fn end() {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn begin_pause_session() -> Result<Session, String> {
+    log::info("Background audio: media pause is disabled on macOS; muting output instead");
+    platform::Session::begin().map(Session::Mute)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn begin_pause_session() -> Result<Session, String> {
+    media::Session::begin().map(Session::Pause)
+}
+
+#[cfg(not(target_os = "macos"))]
 mod media {
     use super::log;
 

@@ -26,7 +26,11 @@ export async function installTray(root: string, controller: RuntimeController): 
   appRoot = root;
   runtimeController = controller;
   const trayIcon = nativeImage.createFromPath(join(appRoot, "native-core/icons/tray.png"));
-  tray = new Tray(trayIcon.isEmpty() ? nativeImage.createEmpty() : trayIcon.resize({ width: 18, height: 18 }));
+  const icon = trayIcon.isEmpty() ? nativeImage.createEmpty() : trayIcon.resize({ width: 18, height: 18 });
+  if (process.platform === "darwin") {
+    icon.setTemplateImage(true);
+  }
+  tray = new Tray(icon);
   tray.setToolTip("Yap");
   await refreshHistoryMenu();
 }
