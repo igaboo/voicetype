@@ -116,10 +116,20 @@ export async function invokeRuntime<T = unknown>(
 
 export async function invokeRuntimeOptional<T = unknown>(
   command: string,
-  args?: Record<string, unknown>
+  args?: Record<string, unknown>,
+  timeoutMs?: number
 ): Promise<T | null> {
   try {
-    return await invokeRuntime<T>(command, args);
+    const request = invokeRuntime<T>(command, args);
+    if (!timeoutMs) {
+      return await request;
+    }
+    return await Promise.race([
+      request,
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), timeoutMs);
+      }),
+    ]);
   } catch (error) {
     if (runtimeName() !== 'web') {
       console.error(`Runtime command failed: ${command}`, error);

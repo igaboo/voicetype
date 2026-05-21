@@ -320,47 +320,52 @@
     }
 
     configReady = false;
-    const cfg = await invokeRuntimeOptional<AppConfig>('config.get');
-    if (cfg) {
-      hotkey = cfg.hotkey;
-      selectedMic = cfg.audioDevice ?? '';
-      pressEnterAfterPaste = cfg.pressEnterAfterPaste ?? false;
-      txProvider = isWindows && cfg.txProvider === 'none' ? defaultTxProvider : cfg.txProvider;
-      txApiKey = cfg.txApiKey;
-      txModel = cfg.txModel;
-      txLanguage = languageValueFromConfig(cfg);
-      fmtProvider = cfg.fmtProvider;
-      fmtApiKey = cfg.fmtApiKey;
-      fmtModel = cfg.fmtModel;
-      fmtStyle = cfg.fmtStyle;
-      onboardingComplete = cfg.onboardingComplete;
-      dgSmartFormat = cfg.dgSmartFormat;
-      dgKeywords = cfg.dgKeywords;
-      oaiPrompt = cfg.oaiPrompt;
-      geminiTemperature = cfg.geminiTemperature;
-      soundsEnabled = cfg.soundsEnabled;
-      backgroundAudioMode = cfg.backgroundAudioMode ?? ((cfg.quietAudioWhileRecording ?? true) ? 'mute' : 'off');
-      gradientEnabled = cfg.gradientEnabled;
-      alwaysVisiblePill = cfg.alwaysVisiblePill;
-      historyEnabled = cfg.historyEnabled;
+    try {
+      const cfg = await invokeRuntimeOptional<AppConfig>('config.get', undefined, 2500);
+      if (cfg) {
+        hotkey = cfg.hotkey;
+        selectedMic = cfg.audioDevice ?? '';
+        pressEnterAfterPaste = cfg.pressEnterAfterPaste ?? false;
+        txProvider = isWindows && cfg.txProvider === 'none' ? defaultTxProvider : cfg.txProvider;
+        txApiKey = cfg.txApiKey;
+        txModel = cfg.txModel;
+        txLanguage = languageValueFromConfig(cfg);
+        fmtProvider = cfg.fmtProvider;
+        fmtApiKey = cfg.fmtApiKey;
+        fmtModel = cfg.fmtModel;
+        fmtStyle = cfg.fmtStyle;
+        onboardingComplete = cfg.onboardingComplete;
+        dgSmartFormat = cfg.dgSmartFormat;
+        dgKeywords = cfg.dgKeywords;
+        oaiPrompt = cfg.oaiPrompt;
+        geminiTemperature = cfg.geminiTemperature;
+        soundsEnabled = cfg.soundsEnabled;
+        backgroundAudioMode = cfg.backgroundAudioMode ?? ((cfg.quietAudioWhileRecording ?? true) ? 'mute' : 'off');
+        gradientEnabled = cfg.gradientEnabled;
+        alwaysVisiblePill = cfg.alwaysVisiblePill;
+        historyEnabled = cfg.historyEnabled;
 
-      // Determine if formatting shares the transcription key
-      fmtUseSameKey = cfg.fmtApiKey === '' || cfg.fmtApiKey === cfg.txApiKey;
-      savedConfigSnapshot = configSnapshot();
-    } else {
-      savedConfigSnapshot = configSnapshot();
-    }
-
-    const devices = await invokeRuntimeOptional<string[]>('audio.list_devices');
-    if (devices) {
-      microphones = devices;
-      if (selectedMic && !devices.includes(selectedMic)) {
-        microphones = [selectedMic, ...devices];
+        // Determine if formatting shares the transcription key
+        fmtUseSameKey = cfg.fmtApiKey === '' || cfg.fmtApiKey === cfg.txApiKey;
+        savedConfigSnapshot = configSnapshot();
+      } else {
+        savedConfigSnapshot = configSnapshot();
       }
-    }
 
-    loading = false;
-    configReady = true;
+      const devices = await invokeRuntimeOptional<string[]>('audio.list_devices', undefined, 2500);
+      if (devices) {
+        microphones = devices;
+        if (selectedMic && !devices.includes(selectedMic)) {
+          microphones = [selectedMic, ...devices];
+        }
+      }
+    } catch (error) {
+      console.error('Failed to load settings', error);
+      savedConfigSnapshot = configSnapshot();
+    } finally {
+      loading = false;
+      configReady = true;
+    }
   }
 
   async function refreshConfig() {

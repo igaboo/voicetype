@@ -133,6 +133,7 @@ function isElectronLocalCommand(command: string): boolean {
     command === "window.open_settings" ||
     command === "window.open_main" ||
     command === "window.hide" ||
+    command === "config.get" ||
     command === "hotkey_capture.start" ||
     command === "hotkey_capture.cancel" ||
     command === "history_menu.refresh" ||
