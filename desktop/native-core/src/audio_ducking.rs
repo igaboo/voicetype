@@ -8,7 +8,6 @@ static ACTIVE_SESSION: Lazy<Mutex<Option<Session>>> = Lazy::new(|| Mutex::new(No
 
 enum Session {
     Mute(platform::Session),
-    #[cfg(not(target_os = "macos"))]
     Pause(media::Session),
 }
 
@@ -16,7 +15,6 @@ impl Session {
     fn end(self) -> Result<(), String> {
         match self {
             Self::Mute(session) => session.end(),
-            #[cfg(not(target_os = "macos"))]
             Self::Pause(session) => session.end(),
         }
     }
@@ -67,13 +65,136 @@ pub fn end() {
 
 #[cfg(target_os = "macos")]
 fn begin_pause_session() -> Result<Session, String> {
-    log::info("Background audio: media pause is disabled on macOS; muting output instead");
-    platform::Session::begin().map(Session::Mute)
+    media::Session::begin().map(Session::Pause)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn begin_pause_session() -> Result<Session, String> {
     media::Session::begin().map(Session::Pause)
+}
+
+#[cfg(target_os = "macos")]
+mod media {
+    use super::log;
+    use std::process::Command;
+
+    #[derive(Clone, Copy)]
+    struct MediaApp {
+        process_name: &'static str,
+        script_name: &'static str,
+        display_name: &'static str,
+    }
+
+    const MEDIA_APPS: &[MediaApp] = &[
+        MediaApp {
+            process_name: "Music",
+            script_name: "Music",
+            display_name: "Music",
+        },
+        MediaApp {
+            process_name: "Spotify",
+            script_name: "Spotify",
+            display_name: "Spotify",
+        },
+    ];
+
+    pub struct Session {
+        paused_apps: Vec<MediaApp>,
+    }
+
+    impl Session {
+        pub fn begin() -> Result<Self, String> {
+            let mut paused_apps = Vec::new();
+
+            for app in MEDIA_APPS {
+                if !is_process_running(app.process_name) {
+                    continue;
+                }
+
+                match is_playing(*app) {
+                    Ok(true) => match pause_app(*app) {
+                        Ok(()) => {
+                            log::info(&format!("Background audio: paused {}", app.display_name));
+                            paused_apps.push(*app);
+                        }
+                        Err(error) => {
+                            log::info(&format!(
+                                "Background audio: could not pause {}: {error}",
+                                app.display_name
+                            ));
+                        }
+                    },
+                    Ok(false) => {}
+                    Err(error) => {
+                        log::info(&format!(
+                            "Background audio: could not inspect {}: {error}",
+                            app.display_name
+                        ));
+                    }
+                }
+            }
+
+            if paused_apps.is_empty() {
+                log::info("Background audio: no supported playing media app to pause");
+            }
+
+            Ok(Self { paused_apps })
+        }
+
+        pub fn end(self) -> Result<(), String> {
+            for app in self.paused_apps {
+                match play_app(app) {
+                    Ok(()) => log::info(&format!("Background audio: resumed {}", app.display_name)),
+                    Err(error) => log::info(&format!(
+                        "Background audio: could not resume {}: {error}",
+                        app.display_name
+                    )),
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn is_process_running(process_name: &str) -> bool {
+        Command::new("pgrep")
+            .args(["-x", process_name])
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn is_playing(app: MediaApp) -> Result<bool, String> {
+        let output = run_script(app, r#"if player state is playing then return "playing" else return "not_playing""#)?;
+        Ok(output.trim() == "playing")
+    }
+
+    fn pause_app(app: MediaApp) -> Result<(), String> {
+        run_script(app, "pause").map(|_| ())
+    }
+
+    fn play_app(app: MediaApp) -> Result<(), String> {
+        run_script(app, "play").map(|_| ())
+    }
+
+    fn run_script(app: MediaApp, command: &str) -> Result<String, String> {
+        let script = format!("tell application \"{}\" to {}", app.script_name, command);
+        let output = Command::new("osascript")
+            .arg("-e")
+            .arg(script)
+            .output()
+            .map_err(|error| error.to_string())?;
+
+        if output.status.success() {
+            return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        if stderr.is_empty() {
+            Err(format!("osascript exited with {}", output.status))
+        } else {
+            Err(stderr)
+        }
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
