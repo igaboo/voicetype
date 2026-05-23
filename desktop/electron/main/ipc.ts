@@ -62,6 +62,8 @@ async function dispatchElectronLocal(
     case "window.hide":
       hideAppWindow(labelFromArgs(args));
       return null;
+    case "config.get":
+      return loadConfig();
     case "hotkey_capture.start": {
       const window = await showAppWindow("settings");
       startHotkeyCapture(window.webContents);
