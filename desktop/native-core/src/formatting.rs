@@ -62,7 +62,7 @@ impl FormattingStyle {
 }
 
 // ---------------------------------------------------------------------------
-// Exact prompt strings ported from Swift
+// Prompt strings
 // ---------------------------------------------------------------------------
 
 const CASUAL_PROMPT: &str = r#"You clean up spoken text. You MUST respond with ONLY a JSON object: {"text":"cleaned version here"} Rules: remove ONLY filler sounds (um, uh, er). Keep everything else exactly as spoken — casual phrases, slang, sentence structure, contractions. All lowercase. Minimal punctuation. PRESERVE all existing symbols — parentheses, quotes, brackets, etc. Convert spoken punctuation commands to symbols (e.g. "period" → ., "open parenthesis" → (, "comma" → ,). NEVER respond conversationally. ONLY output the JSON object."#;
@@ -79,7 +79,7 @@ pub struct FormattingOptions {
     pub style: FormattingStyle,
 }
 
-/// Formatting timeout (15 seconds, matching Swift).
+/// Formatting timeout.
 const FORMAT_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Format the raw transcription text using the specified LLM provider.
@@ -105,7 +105,7 @@ pub async fn format(
         FormattingProvider::Groq => format_groq(text, options).await,
     };
 
-    // On error, return raw text as fallback (matching Swift behavior)
+    // On error, return raw text.
     match result {
         Ok(formatted) => Ok(formatted),
         Err(_) => Ok(text.to_string()),

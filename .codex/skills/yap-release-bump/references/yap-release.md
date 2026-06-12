@@ -77,8 +77,8 @@ Avoid vague bullets:
 
 Use branch names like:
 
-- `release/v2.4.0-background-audio`
-- `release/v2.4.1-windows-audio-fix`
+- `release/vX.Y.Z-background-audio`
+- `release/vX.Y.Z-windows-audio-fix`
 
 Use conventional commits for grouped work:
 

@@ -1,4 +1,3 @@
-export type RuntimeName = 'electron' | 'web';
 export type Unlisten = () => void;
 
 export interface RuntimeDownloadEvent {
@@ -74,20 +73,23 @@ function electronBridge(): YapBridge | undefined {
   return window.yap;
 }
 
-export function runtimeName(): RuntimeName {
-  if (electronBridge()) return 'electron';
-  return 'web';
+export function isNativeRuntime(): boolean {
+  return electronBridge() !== undefined;
 }
 
-export function isNativeRuntime(): boolean {
-  return runtimeName() !== 'web';
+function requiredElectronBridge(): YapBridge {
+  const electron = electronBridge();
+  if (!electron) {
+    throw new Error('Electron preload bridge is not available');
+  }
+  return electron;
 }
 
 export async function invokeRuntime<T = unknown>(
   command: string,
   args?: Record<string, unknown>
 ): Promise<T> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.commands?.invoke) {
     return electron.commands.invoke<T>(command, args);
   }
@@ -112,48 +114,46 @@ export async function invokeRuntimeOptional<T = unknown>(
       }),
     ]);
   } catch (error) {
-    if (runtimeName() !== 'web') {
-      console.error(`Runtime command failed: ${command}`, error);
-    }
+    console.error(`Runtime command failed: ${command}`, error);
     return null;
   }
 }
 
 export async function showSettings(): Promise<void> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.windows?.openSettings) {
     await electron.windows.openSettings();
   }
 }
 
 export async function hideWindow(label: string): Promise<void> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.windows?.hide) {
     await electron.windows.hide(label);
   }
 }
 
 export async function openExternal(url: string): Promise<void> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.shell?.openExternal) {
     await electron.shell.openExternal(url);
     return;
   }
 
-  window.open(url, '_blank', 'noopener,noreferrer');
+  throw new Error('Electron shell bridge is not available');
 }
 
 export async function confirmRuntime(message: string, options: ConfirmOptions = {}): Promise<boolean> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.dialog?.confirm) {
     return electron.dialog.confirm(message, options);
   }
 
-  return window.confirm(message);
+  throw new Error('Electron dialog bridge is not available');
 }
 
 export async function isAutostartEnabled(): Promise<boolean | null> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.autostart?.isEnabled) {
     return electron.autostart.isEnabled();
   }
@@ -162,7 +162,7 @@ export async function isAutostartEnabled(): Promise<boolean | null> {
 }
 
 export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.autostart?.enable && electron.autostart.disable) {
     if (enabled) {
       await electron.autostart.enable();
@@ -176,7 +176,7 @@ export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
 }
 
 export async function checkForRuntimeUpdate(options?: { timeout?: number }): Promise<RuntimeUpdate | null> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.updater?.check) {
     const request = electron.updater.check(options);
     if (!options?.timeout) return request;
@@ -192,31 +192,29 @@ export async function checkForRuntimeUpdate(options?: { timeout?: number }): Pro
 }
 
 export async function relaunchRuntime(): Promise<void> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.app?.relaunch) {
     await electron.app.relaunch();
   }
 }
 
 export async function onRuntimeFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.windows?.onFocusChanged) {
     return electron.windows.onFocusChanged(handler);
   }
 
-  const onFocus = () => handler(true);
-  window.addEventListener('focus', onFocus);
-  return () => window.removeEventListener('focus', onFocus);
+  throw new Error('Electron window event bridge is not available');
 }
 
 export async function listenRuntimeEvent<T = unknown>(
   event: string,
   handler: (payload: T) => void
 ): Promise<Unlisten> {
-  const electron = electronBridge();
+  const electron = requiredElectronBridge();
   if (electron?.events?.listen) {
     return electron.events.listen<T>(event, ({ payload }) => handler(payload));
   }
 
-  return () => {};
+  throw new Error('Electron event bridge is not available');
 }

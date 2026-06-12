@@ -1,6 +1,3 @@
-// This module is a public API; many items are not yet wired into commands.
-#![allow(dead_code)]
-
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{mpsc, Mutex};
 
@@ -9,7 +6,6 @@ static LISTENER_EPOCH: AtomicU64 = AtomicU64::new(0);
 
 /// Callback type for hotkey events.
 type HotkeyCallback = Box<dyn Fn() + Send + 'static>;
-type CaptureCallback = Box<dyn Fn(String) + Send + 'static>;
 type PermissionCallback = Box<dyn Fn(String) + Send + 'static>;
 
 /// Stored callbacks for hotkey events (set by the caller before start).
@@ -21,9 +17,6 @@ static CALLBACKS: once_cell::sync::Lazy<Mutex<HotkeyCallbacks>> =
             on_double_tap: None,
         })
     });
-
-static CAPTURE_CALLBACKS: once_cell::sync::Lazy<Mutex<Option<CaptureCallbacks>>> =
-    once_cell::sync::Lazy::new(|| Mutex::new(None));
 
 static PERMISSION_CALLBACK: once_cell::sync::Lazy<Mutex<Option<PermissionCallback>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
@@ -38,17 +31,10 @@ struct HotkeyCallbacks {
 // protect access via a Mutex.
 unsafe impl Send for HotkeyCallbacks {}
 
-struct CaptureCallbacks {
-    on_preview: CaptureCallback,
-    on_capture: CaptureCallback,
-}
-
 enum RuntimeEvent {
     KeyDown,
     KeyUp,
     DoubleTap,
-    CapturePreview(String),
-    CaptureFinish(CaptureCallback, String),
     PermissionRequired(String),
 }
 
@@ -80,16 +66,6 @@ static DISPATCHER: once_cell::sync::Lazy<mpsc::Sender<RuntimeEvent>> =
                                     f();
                                 }
                             }
-                        }
-                        RuntimeEvent::CapturePreview(shortcut) => {
-                            if let Ok(capture) = CAPTURE_CALLBACKS.lock() {
-                                if let Some(callbacks) = capture.as_ref() {
-                                    (callbacks.on_preview)(shortcut);
-                                }
-                            }
-                        }
-                        RuntimeEvent::CaptureFinish(callback, shortcut) => {
-                            callback(shortcut);
                         }
                         RuntimeEvent::PermissionRequired(label) => {
                             if let Ok(cb) = PERMISSION_CALLBACK.lock() {
@@ -191,10 +167,6 @@ impl HotkeySpec {
             .map(|part| label_part(&part))
             .collect::<Vec<_>>()
             .join("+")
-    }
-
-    pub fn canonical(&self) -> String {
-        self.parts().join("+")
     }
 
     fn parts(&self) -> Vec<String> {
@@ -350,51 +322,6 @@ pub fn set_permission_required_callback(on_permission_required: impl Fn(String) 
     }
 }
 
-pub fn begin_capture(
-    on_preview: impl Fn(String) + Send + 'static,
-    on_capture: impl Fn(String) + Send + 'static,
-) {
-    if let Ok(mut capture) = CAPTURE_CALLBACKS.lock() {
-        *capture = Some(CaptureCallbacks {
-            on_preview: Box::new(on_preview),
-            on_capture: Box::new(on_capture),
-        });
-    }
-    platform::reset_capture_state();
-}
-
-pub fn cancel_capture() {
-    if let Ok(mut capture) = CAPTURE_CALLBACKS.lock() {
-        *capture = None;
-    }
-    platform::reset_capture_state();
-}
-
-fn is_capturing() -> bool {
-    CAPTURE_CALLBACKS
-        .lock()
-        .ok()
-        .is_some_and(|capture| capture.is_some())
-}
-
-fn preview_capture(shortcut: String) {
-    dispatch(RuntimeEvent::CapturePreview(shortcut));
-}
-
-fn finish_capture(shortcut: String) {
-    let callback = CAPTURE_CALLBACKS
-        .lock()
-        .ok()
-        .and_then(|mut capture| capture.take())
-        .map(|callbacks| callbacks.on_capture);
-
-    platform::reset_capture_state();
-
-    if let Some(callback) = callback {
-        dispatch(RuntimeEvent::CaptureFinish(callback, shortcut));
-    }
-}
-
 fn notify_permission_required(label: String) {
     dispatch(RuntimeEvent::PermissionRequired(label));
 }
@@ -429,8 +356,6 @@ mod platform {
     // CGEventTapLocation
     const K_CG_HID_EVENT_TAP: u32 = 0;
     const K_CG_SESSION_EVENT_TAP: u32 = 1;
-    const K_CG_ANNOTATED_SESSION_EVENT_TAP: u32 = 2;
-
     // CGEventTapPlacement
     const K_CG_HEAD_INSERT_EVENT_TAP: u32 = 0;
 
@@ -536,15 +461,6 @@ mod platform {
     /// Currently held configured non-modifier keycodes.
     static PRESSED_TRIGGER_KEYCODES: once_cell::sync::Lazy<Mutex<Vec<i64>>> =
         once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
-
-    /// Last modifier-only candidate observed while native shortcut capture is active.
-    static CAPTURE_MODIFIER_FLAGS: AtomicU64 = AtomicU64::new(0);
-
-    static CAPTURE_TRIGGER_KEYCODES: once_cell::sync::Lazy<Mutex<Vec<i64>>> =
-        once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
-
-    static CAPTURE_LAST_SHORTCUT: once_cell::sync::Lazy<Mutex<String>> =
-        once_cell::sync::Lazy::new(|| Mutex::new(String::new()));
 
     const ALL_MODIFIER_FLAGS: u64 = K_CG_EVENT_FLAG_MASK_SHIFT
         | K_CG_EVENT_FLAG_MASK_CONTROL
@@ -727,17 +643,6 @@ mod platform {
             return event;
         }
 
-        if is_capturing() {
-            match capture_event(event_type, event) {
-                CaptureAction::Captured(shortcut) => {
-                    finish_capture(shortcut);
-                    return std::ptr::null_mut();
-                }
-                CaptureAction::Consume => return std::ptr::null_mut(),
-                CaptureAction::Ignore => {}
-            }
-        }
-
         let trigger_keycodes = TRIGGER_KEYCODES
             .lock()
             .ok()
@@ -816,145 +721,6 @@ mod platform {
         }
 
         event
-    }
-
-    enum CaptureAction {
-        Captured(String),
-        Consume,
-        Ignore,
-    }
-
-    unsafe fn capture_event(event_type: u32, event: CGEventRef) -> CaptureAction {
-        if event_type == K_CG_EVENT_FLAGS_CHANGED {
-            let flags = CGEventGetFlags(event) & ALL_MODIFIER_FLAGS;
-            let previous = CAPTURE_MODIFIER_FLAGS.swap(flags, Ordering::SeqCst);
-            let has_triggers = CAPTURE_TRIGGER_KEYCODES
-                .lock()
-                .ok()
-                .is_some_and(|triggers| !triggers.is_empty());
-
-            if flags == 0 {
-                if previous != 0 && !has_triggers {
-                    return CaptureAction::Captured(
-                        last_capture_shortcut()
-                            .unwrap_or_else(|| shortcut_from_parts(previous, &[])),
-                    );
-                }
-                return CaptureAction::Consume;
-            }
-
-            preview_current_capture();
-
-            return CaptureAction::Consume;
-        }
-
-        if event_type == K_CG_EVENT_KEY_DOWN || event_type == K_CG_EVENT_KEY_UP {
-            let keycode = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE);
-
-            if keycode == 63 || keycode == 179 {
-                return CaptureAction::Consume;
-            }
-
-            if event_type == K_CG_EVENT_KEY_DOWN {
-                if trigger_for_keycode(keycode).is_some() {
-                    mark_capture_trigger_pressed(keycode);
-                    preview_current_capture();
-                }
-                return CaptureAction::Consume;
-            }
-
-            if event_type == K_CG_EVENT_KEY_UP {
-                unmark_capture_trigger_pressed(keycode);
-                let flags = CGEventGetFlags(event) & ALL_MODIFIER_FLAGS;
-                let has_triggers = CAPTURE_TRIGGER_KEYCODES
-                    .lock()
-                    .ok()
-                    .is_some_and(|triggers| !triggers.is_empty());
-                if flags == 0 && !has_triggers {
-                    if let Some(shortcut) = last_capture_shortcut() {
-                        return CaptureAction::Captured(shortcut);
-                    }
-                }
-            }
-
-            return CaptureAction::Consume;
-        }
-
-        CaptureAction::Ignore
-    }
-
-    fn shortcut_from_parts(flags: u64, triggers: &[String]) -> String {
-        let mut parts = Vec::new();
-        if (flags & K_CG_EVENT_FLAG_MASK_COMMAND) != 0 {
-            parts.push("cmd");
-        }
-        if (flags & K_CG_EVENT_FLAG_MASK_CONTROL) != 0 {
-            parts.push("ctrl");
-        }
-        if (flags & K_CG_EVENT_FLAG_MASK_ALTERNATE) != 0 {
-            parts.push("option");
-        }
-        if (flags & K_CG_EVENT_FLAG_MASK_SHIFT) != 0 {
-            parts.push("shift");
-        }
-        if (flags & K_CG_EVENT_FLAG_MASK_SECONDARY_FN) != 0 {
-            parts.push("fn");
-        }
-        for trigger in triggers {
-            parts.push(trigger);
-        }
-
-        parts.join("+")
-    }
-
-    fn preview_current_capture() {
-        let shortcut = capture_shortcut();
-        if !shortcut.is_empty() {
-            if let Ok(mut last) = CAPTURE_LAST_SHORTCUT.lock() {
-                if *last == shortcut {
-                    return;
-                }
-                *last = shortcut.clone();
-            }
-            preview_capture(shortcut);
-        }
-    }
-
-    fn last_capture_shortcut() -> Option<String> {
-        CAPTURE_LAST_SHORTCUT
-            .lock()
-            .ok()
-            .map(|shortcut| shortcut.clone())
-            .filter(|shortcut| !shortcut.is_empty())
-    }
-
-    fn capture_shortcut() -> String {
-        let flags = CAPTURE_MODIFIER_FLAGS.load(Ordering::SeqCst);
-        let triggers = CAPTURE_TRIGGER_KEYCODES
-            .lock()
-            .ok()
-            .map(|keycodes| {
-                keycodes
-                    .iter()
-                    .filter_map(|keycode| trigger_for_keycode(*keycode))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        shortcut_from_parts(flags, &triggers)
-    }
-
-    fn mark_capture_trigger_pressed(keycode: i64) {
-        if let Ok(mut triggers) = CAPTURE_TRIGGER_KEYCODES.lock() {
-            if !triggers.contains(&keycode) {
-                triggers.push(keycode);
-            }
-        }
-    }
-
-    fn unmark_capture_trigger_pressed(keycode: i64) {
-        if let Ok(mut triggers) = CAPTURE_TRIGGER_KEYCODES.lock() {
-            triggers.retain(|trigger| *trigger != keycode);
-        }
     }
 
     fn fire_key_down() {
@@ -1141,112 +907,6 @@ mod platform {
         // The run loop thread will exit on the next iteration
         // since RUNNING is now false.
     }
-
-    pub fn clear_tap_sequence() {
-        LAST_KEY_UP.store(0, Ordering::SeqCst);
-        KEY_DOWN_AT.store(0, Ordering::SeqCst);
-        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
-    }
-
-    pub fn reset_capture_state() {
-        CAPTURE_MODIFIER_FLAGS.store(0, Ordering::SeqCst);
-        if let Ok(mut triggers) = CAPTURE_TRIGGER_KEYCODES.lock() {
-            triggers.clear();
-        }
-        if let Ok(mut last) = CAPTURE_LAST_SHORTCUT.lock() {
-            last.clear();
-        }
-    }
-
-    fn trigger_for_keycode(keycode: i64) -> Option<String> {
-        let trigger = match keycode {
-            0 => "a",
-            1 => "s",
-            2 => "d",
-            3 => "f",
-            4 => "h",
-            5 => "g",
-            6 => "z",
-            7 => "x",
-            8 => "c",
-            9 => "v",
-            11 => "b",
-            12 => "q",
-            13 => "w",
-            14 => "e",
-            15 => "r",
-            16 => "y",
-            17 => "t",
-            18 => "1",
-            19 => "2",
-            20 => "3",
-            21 => "4",
-            22 => "6",
-            23 => "5",
-            24 => "=",
-            25 => "9",
-            26 => "7",
-            27 => "-",
-            28 => "8",
-            29 => "0",
-            30 => "]",
-            31 => "o",
-            32 => "u",
-            33 => "[",
-            34 => "i",
-            35 => "p",
-            36 => "return",
-            37 => "l",
-            38 => "j",
-            39 => "'",
-            40 => "k",
-            41 => ";",
-            42 => "\\",
-            43 => ",",
-            44 => "/",
-            45 => "n",
-            46 => "m",
-            47 => ".",
-            48 => "tab",
-            49 => "space",
-            50 => "`",
-            51 => "delete",
-            53 => "escape",
-            57 => "capslock",
-            64 => "f17",
-            79 => "f18",
-            80 => "f19",
-            90 => "f20",
-            96 => "f5",
-            97 => "f6",
-            98 => "f7",
-            99 => "f3",
-            100 => "f8",
-            101 => "f9",
-            103 => "f11",
-            105 => "f13",
-            106 => "f16",
-            107 => "f14",
-            109 => "f10",
-            111 => "f12",
-            113 => "f15",
-            115 => "home",
-            116 => "pageup",
-            117 => "forwarddelete",
-            118 => "f4",
-            119 => "end",
-            120 => "f2",
-            121 => "pagedown",
-            122 => "f1",
-            123 => "left",
-            124 => "right",
-            125 => "down",
-            126 => "up",
-            _ => return Some(format!("keycode:{keycode}")),
-        };
-
-        Some(trigger.to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1282,9 +942,6 @@ mod platform {
     /// Currently pressed modifiers observed by the keyboard hook.
     static PRESSED_MODIFIERS: AtomicU64 = AtomicU64::new(0);
 
-    /// Last modifier-only candidate observed while native shortcut capture is active.
-    static CAPTURE_MODIFIERS: AtomicU64 = AtomicU64::new(0);
-
     /// The configured non-modifier virtual key codes. Empty means modifier-only.
     static TARGET_VKS: once_cell::sync::Lazy<Mutex<Vec<u16>>> =
         once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
@@ -1292,12 +949,6 @@ mod platform {
     /// Currently held configured non-modifier virtual key codes.
     static PRESSED_TARGET_VKS: once_cell::sync::Lazy<Mutex<Vec<u16>>> =
         once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
-
-    static CAPTURE_TARGET_VKS: once_cell::sync::Lazy<Mutex<Vec<u16>>> =
-        once_cell::sync::Lazy::new(|| Mutex::new(Vec::new()));
-
-    static CAPTURE_LAST_SHORTCUT: once_cell::sync::Lazy<Mutex<String>> =
-        once_cell::sync::Lazy::new(|| Mutex::new(String::new()));
 
     /// Thread ID of the hook thread (for PostThreadMessageW).
     static HOOK_THREAD_ID: AtomicU64 = AtomicU64::new(0);
@@ -1420,17 +1071,6 @@ mod platform {
             .unwrap_or_default();
         let is_modifier_only = targets.is_empty();
 
-        if is_capturing() {
-            match capture_event(vk_code, is_key_down, is_key_up) {
-                CaptureAction::Captured(shortcut) => {
-                    finish_capture(shortcut);
-                    return LRESULT(1);
-                }
-                CaptureAction::Consume => return LRESULT(1),
-                CaptureAction::Ignore => {}
-            }
-        }
-
         if let Some(modifier) = modifier_bit_for_vk(vk_code) {
             if is_key_down {
                 PRESSED_MODIFIERS.fetch_or(modifier, Ordering::SeqCst);
@@ -1483,134 +1123,6 @@ mod platform {
         }
 
         CallNextHookEx(None, n_code, w_param, l_param)
-    }
-
-    enum CaptureAction {
-        Captured(String),
-        Consume,
-        Ignore,
-    }
-
-    fn capture_event(vk_code: u16, is_key_down: bool, is_key_up: bool) -> CaptureAction {
-        if let Some(modifier) = modifier_bit_for_vk(vk_code) {
-            if is_key_down {
-                CAPTURE_MODIFIERS.fetch_or(modifier, Ordering::SeqCst);
-                preview_current_capture();
-                return CaptureAction::Consume;
-            }
-
-            if is_key_up {
-                let previous = CAPTURE_MODIFIERS.load(Ordering::SeqCst);
-                CAPTURE_MODIFIERS.fetch_and(!modifier, Ordering::SeqCst);
-                let has_triggers = CAPTURE_TARGET_VKS
-                    .lock()
-                    .ok()
-                    .is_some_and(|targets| !targets.is_empty());
-                if previous != 0 && !has_triggers {
-                    return CaptureAction::Captured(
-                        last_capture_shortcut()
-                            .unwrap_or_else(|| shortcut_from_parts(previous, &[])),
-                    );
-                }
-                return CaptureAction::Consume;
-            }
-        }
-
-        if is_key_down {
-            if trigger_for_vk(vk_code).is_some() {
-                mark_capture_target_pressed(vk_code);
-                preview_current_capture();
-            }
-            return CaptureAction::Consume;
-        }
-
-        if is_key_up {
-            unmark_capture_target_pressed(vk_code);
-            let modifiers = CAPTURE_MODIFIERS.load(Ordering::SeqCst);
-            let has_triggers = CAPTURE_TARGET_VKS
-                .lock()
-                .ok()
-                .is_some_and(|targets| !targets.is_empty());
-            if modifiers == 0 && !has_triggers {
-                if let Some(shortcut) = last_capture_shortcut() {
-                    return CaptureAction::Captured(shortcut);
-                }
-            }
-            return CaptureAction::Consume;
-        }
-
-        CaptureAction::Ignore
-    }
-
-    fn shortcut_from_parts(modifiers: u64, triggers: &[String]) -> String {
-        let mut parts = Vec::new();
-        if (modifiers & MOD_COMMAND) != 0 {
-            parts.push("cmd");
-        }
-        if (modifiers & MOD_CONTROL) != 0 {
-            parts.push("ctrl");
-        }
-        if (modifiers & MOD_OPTION) != 0 {
-            parts.push("option");
-        }
-        if (modifiers & MOD_SHIFT) != 0 {
-            parts.push("shift");
-        }
-        for trigger in triggers {
-            parts.push(trigger);
-        }
-
-        parts.join("+")
-    }
-
-    fn preview_current_capture() {
-        let shortcut = capture_shortcut();
-        if !shortcut.is_empty() {
-            if let Ok(mut last) = CAPTURE_LAST_SHORTCUT.lock() {
-                if *last == shortcut {
-                    return;
-                }
-                *last = shortcut.clone();
-            }
-            preview_capture(shortcut);
-        }
-    }
-
-    fn last_capture_shortcut() -> Option<String> {
-        CAPTURE_LAST_SHORTCUT
-            .lock()
-            .ok()
-            .map(|shortcut| shortcut.clone())
-            .filter(|shortcut| !shortcut.is_empty())
-    }
-
-    fn capture_shortcut() -> String {
-        let modifiers = CAPTURE_MODIFIERS.load(Ordering::SeqCst);
-        let triggers = CAPTURE_TARGET_VKS
-            .lock()
-            .ok()
-            .map(|targets| {
-                targets
-                    .iter()
-                    .filter_map(|vk| trigger_for_vk(*vk))
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        shortcut_from_parts(modifiers, &triggers)
-    }
-
-    fn mark_capture_target_pressed(vk: u16) {
-        if let Ok(mut targets) = CAPTURE_TARGET_VKS.lock() {
-            if !targets.contains(&vk) {
-                targets.push(vk);
-            }
-        }
-    }
-
-    fn unmark_capture_target_pressed(vk: u16) {
-        if let Ok(mut targets) = CAPTURE_TARGET_VKS.lock() {
-            targets.retain(|target| *target != vk);
-        }
     }
 
     fn fire_key_down() {
@@ -1798,116 +1310,6 @@ mod platform {
             }
         }
     }
-
-    pub fn clear_tap_sequence() {
-        LAST_KEY_UP.store(0, Ordering::SeqCst);
-        KEY_DOWN_AT.store(0, Ordering::SeqCst);
-        CURRENT_PRESS_IS_DOUBLE_TAP.store(false, Ordering::SeqCst);
-    }
-
-    pub fn reset_capture_state() {
-        CAPTURE_MODIFIERS.store(0, Ordering::SeqCst);
-        if let Ok(mut targets) = CAPTURE_TARGET_VKS.lock() {
-            targets.clear();
-        }
-        if let Ok(mut last) = CAPTURE_LAST_SHORTCUT.lock() {
-            last.clear();
-        }
-    }
-
-    fn trigger_for_vk(vk: u16) -> Option<String> {
-        let trigger = match vk {
-            0x41 => "a",
-            0x42 => "b",
-            0x43 => "c",
-            0x44 => "d",
-            0x45 => "e",
-            0x46 => "f",
-            0x47 => "g",
-            0x48 => "h",
-            0x49 => "i",
-            0x4A => "j",
-            0x4B => "k",
-            0x4C => "l",
-            0x4D => "m",
-            0x4E => "n",
-            0x4F => "o",
-            0x50 => "p",
-            0x51 => "q",
-            0x52 => "r",
-            0x53 => "s",
-            0x54 => "t",
-            0x55 => "u",
-            0x56 => "v",
-            0x57 => "w",
-            0x58 => "x",
-            0x59 => "y",
-            0x5A => "z",
-            0x30 => "0",
-            0x31 => "1",
-            0x32 => "2",
-            0x33 => "3",
-            0x34 => "4",
-            0x35 => "5",
-            0x36 => "6",
-            0x37 => "7",
-            0x38 => "8",
-            0x39 => "9",
-            0x20 => "space",
-            0x09 => "tab",
-            0x0D => "return",
-            0x1B => "escape",
-            0x08 => "delete",
-            0x2E => "forwarddelete",
-            0x14 => "capslock",
-            0x25 => "left",
-            0x26 => "up",
-            0x27 => "right",
-            0x28 => "down",
-            0x24 => "home",
-            0x23 => "end",
-            0x21 => "pageup",
-            0x22 => "pagedown",
-            0xBA => ";",
-            0xBB => "=",
-            0xBC => ",",
-            0xBD => "-",
-            0xBE => ".",
-            0xBF => "/",
-            0xC0 => "`",
-            0xDB => "[",
-            0xDC => "\\",
-            0xDD => "]",
-            0xDE => "'",
-            0x70 => "f1",
-            0x71 => "f2",
-            0x72 => "f3",
-            0x73 => "f4",
-            0x74 => "f5",
-            0x75 => "f6",
-            0x76 => "f7",
-            0x77 => "f8",
-            0x78 => "f9",
-            0x79 => "f10",
-            0x7A => "f11",
-            0x7B => "f12",
-            0x7C => "f13",
-            0x7D => "f14",
-            0x7E => "f15",
-            0x7F => "f16",
-            0x80 => "f17",
-            0x81 => "f18",
-            0x82 => "f19",
-            0x83 => "f20",
-            0x84 => "f21",
-            0x85 => "f22",
-            0x86 => "f23",
-            WINDOWS_FN_VK => "fn",
-            _ => return Some(format!("vk:{vk}")),
-        };
-
-        Some(trigger.to_string())
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1922,11 +1324,6 @@ pub fn start(spec: HotkeySpec) {
 /// Stop listening. Safe to call when already stopped.
 pub fn stop() {
     platform::stop();
-}
-
-/// Clear any pending first-tap candidate.
-pub fn clear_tap_sequence() {
-    platform::clear_tap_sequence();
 }
 
 #[cfg(target_os = "macos")]

@@ -73,8 +73,8 @@
   let hotkey = $state(defaultHotkey);
   let capturingHotkey = $state(false);
   let hotkeyPreview = $state('');
-  let webPressedHotkeyParts: string[] = [];
-  let webLastHotkey = '';
+  let pressedHotkeyParts: string[] = [];
+  let lastHotkeyPreview = '';
   let microphones = $state<string[]>([]);
   let selectedMic = $state('');
   let pressEnterAfterPaste = $state(false);
@@ -227,7 +227,7 @@
         oaiPrompt = cfg.oaiPrompt;
         geminiTemperature = cfg.geminiTemperature;
         soundsEnabled = cfg.soundsEnabled;
-        backgroundAudioMode = cfg.backgroundAudioMode ?? ((cfg.quietAudioWhileRecording ?? true) ? 'mute' : 'off');
+        backgroundAudioMode = cfg.backgroundAudioMode;
         gradientEnabled = cfg.gradientEnabled;
         alwaysVisiblePill = cfg.alwaysVisiblePill;
         historyEnabled = cfg.historyEnabled;
@@ -291,7 +291,6 @@
       geminiTemperature,
       elLanguageCode: language.providerCode,
       soundsEnabled,
-      quietAudioWhileRecording: backgroundAudioMode !== 'off',
       backgroundAudioMode,
       gradientEnabled,
       alwaysVisiblePill,
@@ -390,7 +389,7 @@
 
   async function toggleHotkeyCapture() {
     hotkeyPreview = '';
-    resetWebHotkeyCapture();
+    resetHotkeyCaptureState();
     capturingHotkey = !capturingHotkey;
 
     if (capturingHotkey) {
@@ -412,7 +411,7 @@
 
     hotkey = value;
     hotkeyPreview = '';
-    resetWebHotkeyCapture();
+    resetHotkeyCaptureState();
     capturingHotkey = false;
     if (hasNativeRuntime) {
       void invokeRuntimeOptional('hotkey_capture.cancel');
@@ -421,7 +420,7 @@
 
   function cancelHotkeyCapture() {
     hotkeyPreview = '';
-    resetWebHotkeyCapture();
+    resetHotkeyCaptureState();
     capturingHotkey = false;
     if (hasNativeRuntime) {
       void invokeRuntimeOptional('hotkey_capture.cancel');
@@ -445,12 +444,12 @@
       }
 
       const key = canonicalKeyFromEvent(e);
-      syncWebModifiers(e);
-      if (key) addWebHotkeyPart(key);
+      syncModifiers(e);
+      if (key) addHotkeyPart(key);
 
-      const preview = webHotkeyFromPressed();
+      const preview = hotkeyFromPressed();
       if (preview) {
-        webLastHotkey = preview;
+        lastHotkeyPreview = preview;
         hotkeyPreview = preview;
       }
       return;
@@ -467,47 +466,47 @@
     e.stopPropagation();
 
     const key = canonicalKeyFromEvent(e);
-    if (key) removeWebHotkeyPart(key);
-    syncWebModifiers(e);
+    if (key) removeHotkeyPart(key);
+    syncModifiers(e);
 
-    if (webPressedHotkeyParts.length === 0 && webLastHotkey) {
-      setCapturedHotkey(webLastHotkey);
+    if (pressedHotkeyParts.length === 0 && lastHotkeyPreview) {
+      setCapturedHotkey(lastHotkeyPreview);
     }
   }
 
-  function resetWebHotkeyCapture() {
-    webPressedHotkeyParts = [];
-    webLastHotkey = '';
+  function resetHotkeyCaptureState() {
+    pressedHotkeyParts = [];
+    lastHotkeyPreview = '';
   }
 
-  function addWebHotkeyPart(part: string) {
-    if (!webPressedHotkeyParts.includes(part)) {
-      webPressedHotkeyParts = [...webPressedHotkeyParts, part];
+  function addHotkeyPart(part: string) {
+    if (!pressedHotkeyParts.includes(part)) {
+      pressedHotkeyParts = [...pressedHotkeyParts, part];
     }
   }
 
-  function removeWebHotkeyPart(part: string) {
-    webPressedHotkeyParts = webPressedHotkeyParts.filter((pressed) => pressed !== part);
+  function removeHotkeyPart(part: string) {
+    pressedHotkeyParts = pressedHotkeyParts.filter((pressed) => pressed !== part);
   }
 
-  function syncWebModifiers(e: KeyboardEvent) {
-    syncWebModifier('cmd', e.metaKey);
-    syncWebModifier('ctrl', e.ctrlKey);
-    syncWebModifier('option', e.altKey);
-    syncWebModifier('shift', e.shiftKey);
+  function syncModifiers(e: KeyboardEvent) {
+    syncModifier('cmd', e.metaKey);
+    syncModifier('ctrl', e.ctrlKey);
+    syncModifier('option', e.altKey);
+    syncModifier('shift', e.shiftKey);
   }
 
-  function syncWebModifier(part: string, pressed: boolean) {
+  function syncModifier(part: string, pressed: boolean) {
     if (pressed) {
-      addWebHotkeyPart(part);
+      addHotkeyPart(part);
     } else {
-      removeWebHotkeyPart(part);
+      removeHotkeyPart(part);
     }
   }
 
-  function webHotkeyFromPressed(): string {
-    const modifiers = modifierOrder.filter((modifier) => webPressedHotkeyParts.includes(modifier));
-    const triggers = webPressedHotkeyParts.filter((part) => !modifierOrder.includes(part));
+  function hotkeyFromPressed(): string {
+    const modifiers = modifierOrder.filter((modifier) => pressedHotkeyParts.includes(modifier));
+    const triggers = pressedHotkeyParts.filter((part) => !modifierOrder.includes(part));
     return [...modifiers, ...triggers].join('+');
   }
 
@@ -719,8 +718,8 @@
 
   function updaterErrorMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('latest.json') || message.includes('release JSON')) {
-      return 'No signed update feed is available yet. Try again after the next release finishes.';
+    if (message.includes('latest-mac.yml') || message.includes('latest.yml') || message.includes('update metadata')) {
+      return 'No signed update metadata is available yet. Try again after the next release finishes.';
     }
     if (message.includes('signature')) {
       return 'The update could not be verified, so Yap did not install it.';

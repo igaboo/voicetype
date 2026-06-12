@@ -101,15 +101,9 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub sounds_enabled: bool,
 
-    /// Reduce or mute other app audio while Yap is actively recording.
-    #[serde(default = "default_true")]
-    pub quiet_audio_while_recording: bool,
-
     /// How Yap should handle background audio while recording.
-    /// `None` means this config predates the mode setting; fall back to
-    /// quiet_audio_while_recording for migration.
     #[serde(default)]
-    pub background_audio_mode: Option<BackgroundAudioMode>,
+    pub background_audio_mode: BackgroundAudioMode,
 
     /// Show the animated gradient background on the overlay
     #[serde(default = "default_true")]
@@ -140,19 +134,7 @@ impl AppConfig {
     }
 
     pub fn background_audio_mode(&self) -> BackgroundAudioMode {
-        self.background_audio_mode.unwrap_or_else(|| {
-            if self.quiet_audio_while_recording {
-                BackgroundAudioMode::Mute
-            } else {
-                BackgroundAudioMode::Off
-            }
-        })
-    }
-
-    fn normalize_derived_fields(&mut self) {
-        let mode = self.background_audio_mode();
-        self.background_audio_mode = Some(mode);
-        self.quiet_audio_while_recording = mode != BackgroundAudioMode::Off;
+        self.background_audio_mode
     }
 }
 
@@ -194,8 +176,7 @@ impl Default for AppConfig {
             gemini_temperature: 0.0,
             el_language_code: String::new(),
             sounds_enabled: true,
-            quiet_audio_while_recording: true,
-            background_audio_mode: Some(BackgroundAudioMode::Mute),
+            background_audio_mode: BackgroundAudioMode::Mute,
             gradient_enabled: true,
             always_visible_pill: true,
             history_enabled: true,
@@ -255,9 +236,6 @@ pub fn load() -> Result<AppConfig, String> {
         config
     };
 
-    let mut config = config;
-    config.normalize_derived_fields();
-
     // Update global state.
     if let Ok(mut guard) = CONFIG.lock() {
         *guard = config.clone();
@@ -268,12 +246,10 @@ pub fn load() -> Result<AppConfig, String> {
 
 /// Persist the given config to disk and update global state.
 pub fn save(config: &AppConfig) -> Result<(), String> {
-    let mut config = config.clone();
-    config.normalize_derived_fields();
-    save_to_disk(&config)?;
+    save_to_disk(config)?;
 
     if let Ok(mut guard) = CONFIG.lock() {
-        *guard = config;
+        *guard = config.clone();
     }
 
     Ok(())

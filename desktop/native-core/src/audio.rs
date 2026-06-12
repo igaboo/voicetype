@@ -524,7 +524,7 @@ pub fn list_devices() -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// FFT and band computation (ported from Swift AudioRecorder)
+// FFT and band computation
 // ---------------------------------------------------------------------------
 
 /// Compute frequency band levels using FFT.

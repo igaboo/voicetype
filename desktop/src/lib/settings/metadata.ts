@@ -22,8 +22,7 @@ export interface AppConfig {
   geminiTemperature: number;
   elLanguageCode: string;
   soundsEnabled: boolean;
-  quietAudioWhileRecording: boolean;
-  backgroundAudioMode?: BackgroundAudioMode;
+  backgroundAudioMode: BackgroundAudioMode;
   gradientEnabled: boolean;
   alwaysVisiblePill: boolean;
   historyEnabled: boolean;

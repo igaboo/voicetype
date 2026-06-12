@@ -12,12 +12,8 @@ use yap_core_lib::dictation::{self, DictationHost};
 struct RpcRequest {
     #[serde(default)]
     id: Option<Value>,
-    #[serde(default)]
-    #[allow(dead_code)]
-    r#type: Option<String>,
-    #[serde(alias = "command")]
     method: String,
-    #[serde(default, alias = "args")]
+    #[serde(default)]
     params: Option<Value>,
 }
 
@@ -57,20 +53,6 @@ impl CommandHost for SidecarHost {
                 });
             }
         }
-    }
-
-    fn hotkey_capture_preview(&self, shortcut: String) {
-        let _ = self.output.send(RpcOutput::Event {
-            event: "settings:hotkey-preview",
-            payload: json!(shortcut),
-        });
-    }
-
-    fn hotkey_capture_captured(&self, shortcut: String) {
-        let _ = self.output.send(RpcOutput::Event {
-            event: "settings:hotkey-captured",
-            payload: json!(shortcut),
-        });
     }
 }
 
@@ -141,7 +123,6 @@ fn main() {
 
 fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<Value>, String> {
     match request.method.as_str() {
-        "config.get" => to_value(commands::load_config()?).map(Some),
         "config.save" => {
             let config = parse_config_params(request.params)?;
             commands::store_config(config, host.as_ref())?;
@@ -158,15 +139,6 @@ fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<
             Ok(Some(json!({ "cleared": true })))
         }
         "audio.list_devices" => to_value(commands::audio_device_names()).map(Some),
-        "hotkey_capture.start" => {
-            let host: Arc<dyn CommandHost> = host;
-            commands::begin_hotkey_capture(host);
-            Ok(Some(json!({ "started": true })))
-        }
-        "hotkey_capture.cancel" => {
-            commands::stop_hotkey_capture();
-            Ok(Some(json!({ "cancelled": true })))
-        }
         "runtime.start" => {
             let host: Arc<dyn DictationHost> = host;
             dictation::start(host)?;
@@ -183,10 +155,9 @@ fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<
 fn parse_config_params(params: Option<Value>) -> Result<AppConfig, String> {
     let params = params.ok_or_else(|| "missing params".to_string())?;
     let config_value = params
-        .get("cfg")
-        .or_else(|| params.get("config"))
+        .get("config")
         .cloned()
-        .unwrap_or(params);
+        .ok_or_else(|| "missing config param".to_string())?;
     serde_json::from_value::<AppConfig>(config_value)
         .map_err(|err| format!("invalid config params: {err}"))
 }

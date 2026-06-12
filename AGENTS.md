@@ -17,9 +17,9 @@ pnpm run electron:package:ci
 User installation should point to GitHub Releases first. These commands are for development and source builds.
 Use `electron:package:ci` for CI/tag packaging because it explicitly disables Electron Builder publication; release artifacts are published by the GitHub Actions release job.
 
-The canonical application lives in `desktop/`. Electron is the desktop shell. The old root-level Swift package has been removed; Swift remains only as the macOS overlay sidecar under `desktop/native-core/sidecar-overlay/`.
+The canonical application lives in `desktop/`. Electron is the desktop shell. Swift is used only for the macOS overlay sidecar under `desktop/native-core/sidecar-overlay/`.
 
-Rust native code still lives under `desktop/native-core/` for continuity with the existing modules. Electron launches the `yap-core` binary from that crate over newline-delimited JSON-RPC.
+Rust native code lives under `desktop/native-core/`. Electron launches the `yap-core` binary from that crate over newline-delimited JSON-RPC.
 
 Runtime permissions:
 
@@ -67,7 +67,7 @@ Config is stored at `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\conf
 - `pressEnterAfterPaste`
 - `txProvider`, `txApiKey`, `txModel`
 - `fmtProvider`, `fmtApiKey`, `fmtModel`, `fmtStyle`
-- `soundsEnabled`, `quietAudioWhileRecording`, `backgroundAudioMode`
+- `soundsEnabled`, `backgroundAudioMode`
 - `gradientEnabled`, `alwaysVisiblePill`
 - `historyEnabled`, `speechLocale`
 - provider-specific Deepgram, OpenAI, Gemini, and ElevenLabs options
@@ -82,4 +82,4 @@ Empty model strings fall back to provider defaults. Formatting falls back to the
 
 ## Repo Skills
 
-- `.codex/skills/yap-release-bump/` - use this bundled skill when preparing Yap version bumps or releases. It exists to keep releases on branch/PR flow, split changes into feature-grouped commits, choose the semantic version from the update contents, and produce GitHub Release notes that match older Yap releases.
+- `.codex/skills/yap-release-bump/` - use this bundled skill when preparing Yap version bumps or releases. It exists to keep releases on branch/PR flow, split changes into feature-grouped commits, choose the semantic version from the update contents, and produce GitHub Release notes in the current Yap release style.

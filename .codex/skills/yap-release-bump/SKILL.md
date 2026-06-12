@@ -47,7 +47,7 @@ Choose the bump from the actual content:
 
 - Patch: bug fixes, wording/copy corrections, small reliability fixes, CI fixes, docs-only updates.
 - Minor: new user-visible settings, workflows, providers, UI surfaces, platform support, updater behavior, or meaningful feature polish.
-- Major: breaking config changes, incompatible behavior, removed features, migration risk, or changed public contracts.
+- Major: breaking config changes, incompatible behavior, removed features, upgrade risk, or changed public contracts.
 
 Use the latest released tag as the base. If package versions disagree with tags, pause and reconcile before release.
 
@@ -107,7 +107,7 @@ Merge through GitHub so the release notes can reference a PR. Prefer the reposit
 
 ### 7. Tag And Release
 
-Create the tag from the merge commit on `main`, matching older Yap tags:
+Create the tag from the merge commit on `main`:
 
 ```bash
 git switch main

@@ -28,7 +28,6 @@ export interface AppConfig {
   geminiTemperature: number;
   elLanguageCode: string;
   soundsEnabled: boolean;
-  quietAudioWhileRecording: boolean;
   backgroundAudioMode: BackgroundAudioMode;
   gradientEnabled: boolean;
   alwaysVisiblePill: boolean;
@@ -95,7 +94,6 @@ function defaultConfig(): AppConfig {
     geminiTemperature: 0,
     elLanguageCode: "",
     soundsEnabled: true,
-    quietAudioWhileRecording: true,
     backgroundAudioMode: "mute",
     gradientEnabled: true,
     alwaysVisiblePill: true,
@@ -107,7 +105,6 @@ function defaultConfig(): AppConfig {
 function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfig {
   const defaults = defaultConfig();
   const config = { ...defaults, ...(input ?? {}) };
-  const mode = config.backgroundAudioMode ?? (config.quietAudioWhileRecording ? "mute" : "off");
 
   return {
     ...config,
@@ -123,8 +120,9 @@ function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfi
     oaiPrompt: stringOrDefault(config.oaiPrompt, ""),
     elLanguageCode: stringOrDefault(config.elLanguageCode, ""),
     speechLocale: stringOrDefault(config.speechLocale, ""),
-    backgroundAudioMode: isBackgroundAudioMode(mode) ? mode : defaults.backgroundAudioMode,
-    quietAudioWhileRecording: mode !== "off",
+    backgroundAudioMode: isBackgroundAudioMode(config.backgroundAudioMode)
+      ? config.backgroundAudioMode
+      : defaults.backgroundAudioMode,
   };
 }
 

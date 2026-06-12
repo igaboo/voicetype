@@ -537,7 +537,7 @@ pub fn extract_json(text: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Prompt strings (ported from Swift)
+// Prompt strings
 // ---------------------------------------------------------------------------
 
 const DICTATION_COMMANDS: &str = r#"DICTATION COMMANDS — when the speaker says any of these, insert the symbol instead of the words: "period" or "full stop" → . | "comma" → , | "question mark" → ? | "exclamation mark" or "exclamation point" → ! "colon" → : | "semicolon" → ; | "open parenthesis" or "open paren" → ( | "close parenthesis" or "close paren" → ) "open bracket" → [ | "close bracket" → ] | "open brace" or "open curly" → { | "close brace" or "close curly" → } "open quote" or "open quotes" → " | "close quote" or "close quotes" or "end quote" → " "dash" or "em dash" → — | "hyphen" → - | "ellipsis" or "dot dot dot" → … "new line" or "newline" → insert a line break | "new paragraph" → insert two line breaks "ampersand" → & | "at sign" → @ | "hashtag" or "hash" → # | "dollar sign" → $ | "percent" or "percent sign" → % "asterisk" or "star" → * | "slash" or "forward slash" → / | "backslash" → \ "underscore" → _ | "pipe" → | | "tilde" → ~ | "caret" → ^ Only convert these when the speaker clearly intends them as punctuation commands, not when used naturally in speech."#;

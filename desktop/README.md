@@ -26,7 +26,7 @@ Use `electron:package` for local packaging. Use `electron:package:ci` in GitHub 
 - `electron-builder.yml` - Electron package and updater artifact configuration.
 - `src/` - Svelte app shell plus standalone settings entrypoint.
 - `src/lib/settings/` - settings UI, update checks, and transcription history.
-- `native-core/` - Rust crate that now provides `yap-core` and retained native modules.
+- `native-core/` - Rust crate that provides the `yap-core` native runtime.
 - `native-core/src/yap_core.rs` - JSON-RPC native runtime launched by Electron.
 - `native-core/src/dictation.rs` - Electron-backed native dictation runtime.
 - `native-core/src/` - shared Rust native modules for audio, hotkeys, transcription, formatting, paste, history, and overlays.
@@ -36,4 +36,4 @@ Use `electron:package` for local packaging. Use `electron:package:ci` in GitHub 
 
 ## Layout
 
-Electron owns the desktop shell. The Rust crate remains under `native-core/` for continuity with the existing native modules, but `yap-core` is the runtime process Electron launches for dictation, hotkeys, overlays, transcription, formatting, history, and paste.
+Electron owns the desktop shell. `yap-core` is the native runtime process Electron launches for dictation, hotkeys, overlays, transcription, formatting, history, and paste.
