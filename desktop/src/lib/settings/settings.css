@@ -300,20 +300,25 @@ label {
 }
 
 .select {
+  appearance: none;
+  -webkit-appearance: none;
   cursor: pointer;
 }
 
-.password-wrapper {
+.password-wrapper,
+.select-wrapper {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-.password-wrapper .input {
+.password-wrapper .input,
+.select-wrapper .select {
   padding-right: 38px;
 }
 
-.password-toggle {
+.password-toggle,
+.select-toggle {
   position: absolute;
   right: 6px;
   display: inline-flex;
@@ -328,11 +333,16 @@ label {
   cursor: pointer;
 }
 
+.select-toggle {
+  pointer-events: none;
+}
+
 .password-toggle:hover {
   background: var(--settings-surface-hover);
 }
 
-.password-toggle svg {
+.password-toggle svg,
+.select-toggle svg {
   width: 15px;
   height: 15px;
 }

@@ -1152,15 +1152,22 @@
 
               <div class="field-row">
                 <span class="field-label">Microphone</span>
-                <select class="select" bind:value={selectedMic}>
-                  <option value="">System Default</option>
-                  {#each microphones as mic}
-                    <option value={mic}>{mic}</option>
-                  {/each}
-                  {#if microphones.length === 0}
-                    <option value="">No devices found</option>
-                  {/if}
-                </select>
+                <div class="select-wrapper">
+                  <select class="select" bind:value={selectedMic}>
+                    <option value="">System Default</option>
+                    {#each microphones as mic}
+                      <option value={mic}>{mic}</option>
+                    {/each}
+                    {#if microphones.length === 0}
+                      <option value="">No devices found</option>
+                    {/if}
+                  </select>
+                  <button class="select-toggle" aria-hidden="true" tabindex="-1" type="button">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                      <path d="M4 6L8 10L12 6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
 
               <div class="field-divider"></div>
@@ -1258,11 +1265,18 @@
             <div class="section-body">
               <div class="field-row">
                 <span class="field-label">Provider</span>
-                <select class="select" bind:value={txProvider}>
-                  {#each txProviders as p}
-                    <option value={p.value} disabled={p.disabled}>{p.label}</option>
-                  {/each}
-                </select>
+                <div class="select-wrapper">
+                  <select class="select" bind:value={txProvider}>
+                    {#each txProviders as p}
+                      <option value={p.value} disabled={p.disabled}>{p.label}</option>
+                    {/each}
+                  </select>
+                  <button class="select-toggle" aria-hidden="true" tabindex="-1" type="button">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                      <path d="M4 6L8 10L12 6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
                 {#if !hasTxProvider}
                   <span class="field-description">
                     {isWindows
@@ -1274,11 +1288,18 @@
 
               <div class="field-row">
                 <span class="field-label">Language</span>
-                <select class="select" bind:value={txLanguage}>
-                  {#each languageOptions as language}
-                    <option value={language.value}>{language.label}</option>
-                  {/each}
-                </select>
+                <div class="select-wrapper">
+                  <select class="select" bind:value={txLanguage}>
+                    {#each languageOptions as language}
+                      <option value={language.value}>{language.label}</option>
+                    {/each}
+                  </select>
+                  <button class="select-toggle" aria-hidden="true" tabindex="-1" type="button">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                      <path d="M4 6L8 10L12 6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
                 <span class="field-description">Use auto-detect, or choose a language to improve recognition.</span>
               </div>
 
@@ -1402,11 +1423,18 @@
             <div class="section-body">
               <div class="field-row">
                 <span class="field-label">Provider</span>
-                <select class="select" bind:value={fmtProvider}>
-                  {#each fmtProviders as p}
-                    <option value={p.value}>{p.label}</option>
-                  {/each}
-                </select>
+                <div class="select-wrapper">
+                  <select class="select" bind:value={fmtProvider}>
+                    {#each fmtProviders as p}
+                      <option value={p.value}>{p.label}</option>
+                    {/each}
+                  </select>
+                  <button class="select-toggle" aria-hidden="true" tabindex="-1" type="button">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8">
+                      <path d="M4 6L8 10L12 6" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                  </button>
+                </div>
                 {#if !hasFmtProvider}
                   <span class="field-description">Paste the raw transcription without cleanup.</span>
                 {/if}
