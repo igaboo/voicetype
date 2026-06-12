@@ -10,7 +10,7 @@ directories:
 files:
   - build/**/*
   - dist-electron/**/*
-  - native-core/icons/tray.png
+  - native-core/icons/**/*
   - package.json
 extraResources:
   - from: native-core/target/release

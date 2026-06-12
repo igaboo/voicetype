@@ -5,7 +5,7 @@
 Update all of these for a release:
 
 - `desktop/package.json`
-- `desktop/package-lock.json`
+- `desktop/pnpm-lock.yaml`
 - `desktop/native-core/Cargo.toml`
 - `desktop/native-core/Cargo.lock`
 - `desktop/electron-builder.yml`
@@ -15,7 +15,7 @@ Prefer:
 
 ```bash
 cd desktop
-npm version X.Y.Z --no-git-tag-version
+pnpm version X.Y.Z --no-git-tag-version
 cargo check --manifest-path native-core/Cargo.toml --bin yap-core
 ```
 
@@ -60,11 +60,11 @@ Avoid vague bullets:
 - chore: bump version to X.Y.Z
 
 ## Testing
-- [x] `npm run check`
-- [x] `npm run electron:check`
+- [x] `pnpm run check`
+- [x] `pnpm run electron:check`
 - [x] `cargo check --manifest-path native-core/Cargo.toml --bin yap-core`
-- [x] `cargo fmt`
-- [x] `npm run electron:build`
+- [x] `cargo fmt --check --manifest-path native-core/Cargo.toml`
+- [x] `pnpm run electron:build`
 
 ## Release Notes Preview
 ## What's Changed

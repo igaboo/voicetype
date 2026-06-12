@@ -31,45 +31,24 @@
     type RuntimeDownloadEvent,
     type RuntimeUpdate,
   } from '../runtime/yap';
-
-  // ── Config Shape (matches Rust AppConfig with camelCase serde) ─────────
-
-  interface AppConfig {
-    hotkey: string;
-    audioDevice: string;
-    pressEnterAfterPaste: boolean;
-    txProvider: string;
-    txApiKey: string;
-    txModel: string;
-    fmtProvider: string;
-    fmtApiKey: string;
-    fmtModel: string;
-    fmtStyle: string;
-    onboardingComplete: boolean;
-    dgSmartFormat: boolean;
-    dgKeywords: string;
-    dgLanguage: string;
-    oaiLanguage: string;
-    oaiPrompt: string;
-    geminiTemperature: number;
-    elLanguageCode: string;
-    soundsEnabled: boolean;
-    quietAudioWhileRecording: boolean;
-    backgroundAudioMode?: BackgroundAudioMode;
-    gradientEnabled: boolean;
-    alwaysVisiblePill: boolean;
-    historyEnabled: boolean;
-    speechLocale: string;
-  }
-
-  interface HistoryEntry {
-    id: string;
-    timestamp: string;
-    text: string;
-    transcriptionProvider: string;
-    formattingProvider: string | null;
-    formattingStyle: string | null;
-  }
+  import {
+    backgroundAudioModes,
+    fmtDefaultModels,
+    fmtProviders,
+    languageOptions,
+    modifierOrder,
+    providerLabels,
+    settingsSections,
+    styleData,
+    styleExampleInput,
+    transcriptionProviders,
+    txDefaultModels,
+    type AppConfig,
+    type BackgroundAudioMode,
+    type HistoryEntry,
+    type SectionId,
+    type UpdateStatus,
+  } from './metadata';
 
   // ── Provider Metadata ─────────────────────────────────────────────────
 
@@ -82,99 +61,7 @@
   const buildLabel = `v${__APP_VERSION__} (${__GIT_COMMIT_SHORT__})`;
   const buildUrl = __GITHUB_COMMIT_URL__;
 
-  const txProviders: Array<{ value: string; label: string; disabled?: boolean }> = [
-    { value: 'none', label: isWindows ? 'On-device (macOS only)' : 'On-device', disabled: isWindows },
-    { value: 'gemini', label: 'Gemini' },
-    { value: 'openai', label: 'OpenAI' },
-    { value: 'deepgram', label: 'Deepgram' },
-    { value: 'elevenlabs', label: 'ElevenLabs' },
-  ];
-
-  const fmtProviders = [
-    { value: 'none', label: 'None' },
-    { value: 'gemini', label: 'Gemini' },
-    { value: 'openai', label: 'OpenAI' },
-    { value: 'anthropic', label: 'Anthropic' },
-    { value: 'groq', label: 'Groq' },
-  ];
-
-  const txDefaultModels: Record<string, string> = {
-    none: '',
-    gemini: 'gemini-2.5-flash',
-    openai: 'gpt-4o-transcribe',
-    deepgram: 'nova-3',
-    elevenlabs: 'scribe_v1',
-  };
-
-  const fmtDefaultModels: Record<string, string> = {
-    none: '',
-    gemini: 'gemini-2.5-flash',
-    openai: 'gpt-4o-mini',
-    anthropic: 'claude-haiku-4-5-20251001',
-    groq: 'llama-3.3-70b-versatile',
-  };
-
-  const languageOptions = [
-    { value: 'auto', label: 'Auto-detect', providerCode: '', speechLocale: '' },
-    { value: 'en', label: 'English', providerCode: 'en', speechLocale: 'en-US' },
-    { value: 'es', label: 'Spanish', providerCode: 'es', speechLocale: 'es-ES' },
-    { value: 'fr', label: 'French', providerCode: 'fr', speechLocale: 'fr-FR' },
-    { value: 'de', label: 'German', providerCode: 'de', speechLocale: 'de-DE' },
-    { value: 'it', label: 'Italian', providerCode: 'it', speechLocale: 'it-IT' },
-    { value: 'pt', label: 'Portuguese', providerCode: 'pt', speechLocale: 'pt-PT' },
-    { value: 'ja', label: 'Japanese', providerCode: 'ja', speechLocale: 'ja-JP' },
-    { value: 'ko', label: 'Korean', providerCode: 'ko', speechLocale: 'ko-KR' },
-    { value: 'zh', label: 'Chinese', providerCode: 'zh', speechLocale: 'zh-CN' },
-  ];
-
-  const styleData: Record<string, { label: string; description: string; example: string }> = {
-    casual: {
-      label: 'Casual',
-      description: 'Lowercase, minimal punctuation, conversational tone',
-      example: 'yeah i was thinking we could try that new place on friday if you\'re free',
-    },
-    formatted: {
-      label: 'Formatted',
-      description: 'Proper capitalization and punctuation, natural writing style',
-      example: 'Yeah, I was thinking we could try that new place on Friday if you\'re free.',
-    },
-    professional: {
-      label: 'Professional',
-      description: 'Polished, clear, and business-appropriate language',
-      example: 'I was considering whether we might visit the new restaurant on Friday, if your schedule allows.',
-    },
-  };
-
-  const styleExampleInput = 'yeah i was thinking we could try that new place on friday if youre free';
-  const modifierOrder = ['cmd', 'ctrl', 'option', 'shift', 'fn'];
-
-  const providerLabels: Record<string, string> = {
-    none: 'On-device',
-    gemini: 'Gemini',
-    openai: 'OpenAI',
-    deepgram: 'Deepgram',
-    elevenlabs: 'ElevenLabs',
-    anthropic: 'Anthropic',
-    groq: 'Groq',
-  };
-
-  type SectionId = 'general' | 'transcription' | 'formatting' | 'history' | 'advanced';
-  type UpdateStatus = 'idle' | 'checking' | 'available' | 'upToDate' | 'downloading' | 'ready' | 'error';
-  type BackgroundAudioMode = 'off' | 'mute' | 'pause';
-
-  const settingsSections: Array<{ id: SectionId; label: string; description: string }> = [
-    { id: 'general', label: 'General', description: 'Hotkey, microphone, and app behavior' },
-    { id: 'transcription', label: 'Transcription', description: 'Transcription provider and model' },
-    { id: 'formatting', label: 'Formatting', description: 'Formatting provider and model' },
-    { id: 'history', label: 'History', description: 'Recent transcript history' },
-    { id: 'advanced', label: 'Advanced', description: 'Updates and defaults' },
-  ];
-
-  const backgroundAudioModes: Array<{ value: BackgroundAudioMode; label: string }> = [
-    { value: 'off', label: 'Off' },
-    { value: 'mute', label: 'Mute' },
-    { value: 'pause', label: 'Pause' },
-  ];
+  const txProviders = transcriptionProviders(isWindows);
 
   // ── State ─────────────────────────────────────────────────────────────
 

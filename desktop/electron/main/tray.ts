@@ -1,6 +1,5 @@
 import { app, Menu, nativeImage, Tray } from "electron";
 import type { MenuItemConstructorOptions } from "electron";
-import { join } from "node:path";
 import {
   clearHistory,
   copyHistoryEntryToClipboard,
@@ -8,10 +7,10 @@ import {
   loadHistory,
   menuEntries,
 } from "./history";
+import { trayIconPath } from "./paths";
 import { sendToWindow, showAppWindow } from "./windows";
 
 let tray: Tray | null = null;
-let appRoot = "";
 let enabled = true;
 
 interface RuntimeController {
@@ -20,12 +19,11 @@ interface RuntimeController {
 
 let runtimeController: RuntimeController | null = null;
 
-export async function installTray(root: string, controller: RuntimeController): Promise<void> {
+export async function installTray(controller: RuntimeController): Promise<void> {
   if (tray) return;
 
-  appRoot = root;
   runtimeController = controller;
-  const trayIcon = nativeImage.createFromPath(join(appRoot, "native-core/icons/tray.png"));
+  const trayIcon = nativeImage.createFromPath(trayIconPath());
   const icon = trayIcon.isEmpty() ? nativeImage.createEmpty() : trayIcon.resize({ width: 18, height: 18 });
   if (process.platform === "darwin") {
     icon.setTemplateImage(true);

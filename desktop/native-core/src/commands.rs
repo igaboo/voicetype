@@ -12,10 +12,6 @@ pub trait CommandHost: Send + Sync + 'static {
     fn hotkey_capture_captured(&self, _shortcut: String) {}
 }
 
-pub struct NoopCommandHost;
-
-impl CommandHost for NoopCommandHost {}
-
 pub fn load_config() -> Result<AppConfig, String> {
     config::load()
 }

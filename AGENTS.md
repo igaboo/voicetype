@@ -51,11 +51,10 @@ Hotkey provider
 - `desktop/native-core/src/paste.rs` - clipboard write, paste simulation, and clipboard restore.
 - `desktop/native-core/src/win_overlay.rs` - Windows native overlay implementation.
 - `desktop/native-core/src/sidecar.rs` - macOS overlay sidecar process management.
-- `desktop/native-core/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS.
+- `desktop/native-core/sidecar-overlay/` - Swift/AppKit overlay sidecar for macOS; Windows overlay rendering lives in Rust.
 - `desktop/native-core/sounds/` - bundled WAV sound effects.
 - `desktop/native-core/icons/` - app, Windows, macOS, and tray icons used by builds.
 - `desktop/src/lib/settings/` - Svelte settings UI, transcription history, and update checks.
-- `desktop/src/lib/overlay/` - Svelte overlay view used where needed.
 
 ## Config
 

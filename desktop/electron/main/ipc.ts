@@ -1,19 +1,19 @@
 import { app, dialog, ipcMain, shell, type WebContents } from "electron";
-import electronUpdater from "electron-updater";
-import { loadConfig, saveConfig } from "./config";
-import { clearHistory, loadHistory, removeHistoryEntry } from "./history";
+import { loadConfig } from "./config";
 import { cancelHotkeyCapture, startHotkeyCapture } from "./hotkeyCapture";
-import { SidecarUnavailableError, type YapCoreSidecar } from "./sidecar";
+import type { YapCoreSidecar } from "./sidecar";
 import { refreshHistoryMenu } from "./tray";
+import {
+  checkForElectronUpdate,
+  configureUpdater,
+  downloadAndInstallElectronUpdate,
+} from "./updater";
 import { hideAppWindow, showAppWindow, windowLabelFor, type WindowLabel } from "./windows";
 
 type InvokeArgs = Record<string, unknown>;
 
-const { autoUpdater } = electronUpdater;
-
 export function installIpcHandlers(sidecar: YapCoreSidecar): void {
-  autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  configureUpdater();
 
   ipcMain.handle("yap:app-info", () => ({
     name: app.getName(),
@@ -37,14 +37,7 @@ async function dispatchInvoke(
     return dispatchElectronLocal(command, args, sender);
   }
 
-  try {
-    return await sidecar.invoke(command, args);
-  } catch (error) {
-    if (error instanceof SidecarUnavailableError && hasJsFallback(command)) {
-      return dispatchJsFallback(command, args);
-    }
-    throw error;
-  }
+  return sidecar.invoke(command, args);
 }
 
 async function dispatchElectronLocal(
@@ -75,11 +68,6 @@ async function dispatchElectronLocal(
     case "history_menu.refresh":
       await refreshHistoryMenu();
       return null;
-    case "events.listen":
-    case "events.unlisten":
-    case "events.emit":
-    case "events.emit_to":
-      return null;
     case "window.list":
       return [{ label: windowLabelFor(sender.id) }];
     case "dialog.confirm":
@@ -108,28 +96,6 @@ async function dispatchElectronLocal(
   }
 }
 
-async function dispatchJsFallback(command: string, args: InvokeArgs): Promise<unknown> {
-  switch (command) {
-    case "config.get":
-      return loadConfig();
-    case "config.save":
-      await saveConfig((args.config ?? args.cfg) as never);
-      return null;
-    case "audio.list_devices":
-      return [];
-    case "history.get":
-      return loadHistory();
-    case "history.remove":
-      await removeHistoryEntry(String(args.id ?? ""));
-      return null;
-    case "history.clear":
-      await clearHistory();
-      return null;
-    default:
-      throw new Error(`Electron backend command is not implemented: ${command}`);
-  }
-}
-
 function isElectronLocalCommand(command: string): boolean {
   return (
     command === "window.open_settings" ||
@@ -139,7 +105,6 @@ function isElectronLocalCommand(command: string): boolean {
     command === "hotkey_capture.start" ||
     command === "hotkey_capture.cancel" ||
     command === "history_menu.refresh" ||
-    command.startsWith("events.") ||
     command === "window.list" ||
     command === "dialog.confirm" ||
     command === "shell.open_external" ||
@@ -152,75 +117,8 @@ function isElectronLocalCommand(command: string): boolean {
   );
 }
 
-function hasJsFallback(command: string): boolean {
-  return (
-    command === "config.get" ||
-    command === "config.save" ||
-    command === "audio.list_devices" ||
-    command === "history.get" ||
-    command === "history.remove" ||
-    command === "history.clear"
-  );
-}
-
 function labelFromArgs(args: InvokeArgs): WindowLabel {
   return args.label === "settings" ? "settings" : "main";
-}
-
-async function checkForElectronUpdate(): Promise<{ version: string } | null> {
-  if (!app.isPackaged) return null;
-
-  const result = await autoUpdater.checkForUpdates();
-  const version = result?.updateInfo?.version;
-  return version ? { version } : null;
-}
-
-async function downloadAndInstallElectronUpdate(sender: WebContents): Promise<null> {
-  if (!app.isPackaged) return null;
-
-  let transferred = 0;
-  sender.send("yap:updater-download", {
-    event: "Started",
-    data: {},
-  });
-
-  return new Promise((resolve, reject) => {
-    const cleanup = () => {
-      autoUpdater.off("download-progress", onProgress);
-      autoUpdater.off("update-downloaded", onDownloaded);
-      autoUpdater.off("error", onError);
-    };
-    const onProgress = (progress: { total?: number; transferred?: number }) => {
-      const nextTransferred = progress.transferred ?? transferred;
-      const chunkLength = Math.max(0, nextTransferred - transferred);
-      transferred = nextTransferred;
-      sender.send("yap:updater-download", {
-        event: "Progress",
-        data: {
-          contentLength: progress.total,
-          chunkLength,
-        },
-      });
-    };
-    const onDownloaded = () => {
-      cleanup();
-      sender.send("yap:updater-download", {
-        event: "Finished",
-        data: {},
-      });
-      autoUpdater.quitAndInstall(false, true);
-      resolve(null);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-
-    autoUpdater.on("download-progress", onProgress);
-    autoUpdater.once("update-downloaded", onDownloaded);
-    autoUpdater.once("error", onError);
-    autoUpdater.downloadUpdate().catch(onError);
-  });
 }
 
 async function showDialogMessage(args: InvokeArgs): Promise<string> {

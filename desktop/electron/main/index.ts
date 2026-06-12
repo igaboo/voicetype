@@ -1,25 +1,23 @@
 import { app, Menu } from "electron";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { configureAppIdentity } from "./appIdentity";
 import { loadConfig } from "./config";
 import { installIpcHandlers } from "./ipc";
+import { appRoot } from "./paths";
 import { YapCoreSidecar } from "./sidecar";
 import { installTray, refreshHistoryMenu } from "./tray";
 import { createMainWindow, hideAppIfNoWindowsVisible, sendToAllWindows, sendToWindow, showAppWindow } from "./windows";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const appRoot = join(__dirname, "../..");
 const sidecar = new YapCoreSidecar({
   appRoot,
   onEvent: handleSidecarEvent,
 });
 
 app.whenReady().then(async () => {
-  app.setName("Yap");
+  configureAppIdentity();
   Menu.setApplicationMenu(null);
   installIpcHandlers(sidecar);
   await loadConfig();
-  await installTray(appRoot, {
+  await installTray({
     setEnabled: async (enabled) => {
       await sidecar.invoke(enabled ? "runtime.start" : "runtime.stop", {});
     },

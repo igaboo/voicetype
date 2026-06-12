@@ -2,6 +2,7 @@
   "name": "yap",
   "version": "2.4.1",
   "description": "Cross-platform voice-to-text tray app",
+  "author": "igaboo",
   "type": "module",
   "packageManager": "pnpm@10.33.2",
   "main": "dist-electron/main/index.js",

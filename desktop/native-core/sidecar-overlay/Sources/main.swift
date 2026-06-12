@@ -75,9 +75,6 @@ DispatchQueue.global(qos: .userInteractive).async {
                     hotkeyLabel: msg.hotkeyLabel
                 )
 
-            case "celebrating":
-                panel.applyCelebrating()
-
             default:
                 break
             }

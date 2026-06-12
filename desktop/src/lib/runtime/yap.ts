@@ -21,15 +21,6 @@ interface ConfirmOptions {
   cancelLabel?: string;
 }
 
-interface YapCommandResult {
-  ok: boolean;
-  command: string;
-  reason?: string;
-  value?: unknown;
-  data?: unknown;
-  payload?: unknown;
-}
-
 interface YapAppInfo {
   name: string;
   version: string;
@@ -48,12 +39,10 @@ interface YapBridge {
     openSettings?: () => Promise<void>;
     showMain?: () => Promise<void>;
     hide?: (label: string) => Promise<void>;
-    hideSettings?: () => Promise<void>;
     onFocusChanged?: (handler: (focused: boolean) => void) => Promise<Unlisten> | Unlisten;
   };
   commands?: {
     invoke?: <T = unknown>(command: string, args?: Record<string, unknown>) => Promise<T>;
-    invokePlaceholder?: (command: string) => Promise<YapCommandResult>;
   };
   dialog?: {
     confirm?: (message: string, options?: ConfirmOptions) => Promise<boolean>;
@@ -103,14 +92,6 @@ export async function invokeRuntime<T = unknown>(
     return electron.commands.invoke<T>(command, args);
   }
 
-  if (electron?.commands?.invokePlaceholder) {
-    const result = await electron.commands.invokePlaceholder(command);
-    if (result.ok) {
-      return (result.value ?? result.data ?? result.payload) as T;
-    }
-    throw new Error(result.reason ?? `Electron command is not implemented: ${command}`);
-  }
-
   throw new Error(`No native runtime command bridge is available for ${command}`);
 }
 
@@ -142,22 +123,14 @@ export async function showSettings(): Promise<void> {
   const electron = electronBridge();
   if (electron?.windows?.openSettings) {
     await electron.windows.openSettings();
-    return;
   }
-
 }
 
 export async function hideWindow(label: string): Promise<void> {
   const electron = electronBridge();
   if (electron?.windows?.hide) {
     await electron.windows.hide(label);
-    return;
   }
-  if (label === 'settings' && electron?.windows?.hideSettings) {
-    await electron.windows.hideSettings();
-    return;
-  }
-
 }
 
 export async function openExternal(url: string): Promise<void> {
@@ -205,7 +178,14 @@ export async function setAutostartEnabled(enabled: boolean): Promise<boolean> {
 export async function checkForRuntimeUpdate(options?: { timeout?: number }): Promise<RuntimeUpdate | null> {
   const electron = electronBridge();
   if (electron?.updater?.check) {
-    return electron.updater.check(options);
+    const request = electron.updater.check(options);
+    if (!options?.timeout) return request;
+    return Promise.race([
+      request,
+      new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), options.timeout);
+      }),
+    ]);
   }
 
   return null;
@@ -215,9 +195,7 @@ export async function relaunchRuntime(): Promise<void> {
   const electron = electronBridge();
   if (electron?.app?.relaunch) {
     await electron.app.relaunch();
-    return;
   }
-
 }
 
 export async function onRuntimeFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {

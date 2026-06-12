@@ -1,12 +1,6 @@
 import { app, BrowserWindow, shell } from "electron";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const appRoot = join(__dirname, "../..");
-const preloadPath = join(appRoot, "dist-electron/preload/index.mjs");
-const rendererDevUrl =
-  process.env.YAP_RENDERER_URL || process.env.ELECTRON_RENDERER_URL || "http://localhost:1420";
+import { join } from "node:path";
+import { appIconPath, appRoot, preloadPath, rendererDevUrl } from "./paths";
 
 export type WindowLabel = "main" | "settings";
 
@@ -135,6 +129,7 @@ function createFramelessWindow(
             height: 36,
           },
     trafficLightPosition: { x: 14, y: 14 },
+    icon: appIconPath(),
     backgroundColor: "#101215",
     webPreferences: {
       preload: preloadPath,

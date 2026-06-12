@@ -35,7 +35,7 @@ Gather current state before changing anything:
 - `git status --short --branch`
 - `git tag --sort=-creatordate`
 - `git log --oneline <latest-tag>..HEAD`
-- Current versions in `desktop/package.json`, `desktop/package-lock.json`, `desktop/native-core/Cargo.toml`, `desktop/native-core/Cargo.lock`, and `SPEC.md`
+- Current versions in `desktop/package.json`, `desktop/pnpm-lock.yaml`, `desktop/native-core/Cargo.toml`, `desktop/native-core/Cargo.lock`, and `SPEC.md`
 - Diff/stat of all uncommitted or branch changes
 - Existing release note style from the latest comparable GitHub Releases
 
@@ -79,11 +79,11 @@ Run the repo's relevant checks before PR/merge:
 
 ```bash
 cd desktop
-npm run electron:check
-npm run check
+pnpm run electron:check
+pnpm run check
 cargo check --manifest-path native-core/Cargo.toml --bin yap-core
-cargo fmt
-npm run electron:build
+cargo fmt --check --manifest-path native-core/Cargo.toml
+pnpm run electron:build
 ```
 
 If a command cannot run locally, report why in the PR and final answer.

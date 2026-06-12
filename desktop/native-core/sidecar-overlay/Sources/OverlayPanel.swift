@@ -332,10 +332,6 @@ class OverlayPanel: NSPanel {
         updatePillTarget()
     }
 
-    func applyCelebrating() {
-        overlayState.celebratingToken = UUID()
-    }
-
     // MARK: - Private
 
     private var isMinimizedIdle: Bool {
@@ -547,7 +543,6 @@ class OverlayState: ObservableObject {
     @Published var gradientEnabled: Bool = true
     @Published var alwaysVisible: Bool = true
     @Published var handsFreeElapsed: TimeInterval = 0
-    @Published var celebratingToken: UUID = UUID()
     var onPermissionAction: (() -> Void)?
     var onPauseResume: (() -> Void)?
     var onStop: (() -> Void)?

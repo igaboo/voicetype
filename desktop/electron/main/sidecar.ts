@@ -232,8 +232,6 @@ function resolveYapCorePath(appRoot: string): string | null {
       ]
     : [
         join(appRoot, "native-core", "target", "debug", executable),
-        join(appRoot, "yap-core", "target", "debug", executable),
-        join(appRoot, "..", "yap-core", "target", "debug", executable),
       ];
 
   return candidates.find(isExecutableCandidate) ?? null;

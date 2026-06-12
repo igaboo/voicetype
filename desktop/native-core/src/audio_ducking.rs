@@ -63,12 +63,6 @@ pub fn end() {
     }
 }
 
-#[cfg(target_os = "macos")]
-fn begin_pause_session() -> Result<Session, String> {
-    media::Session::begin().map(Session::Pause)
-}
-
-#[cfg(not(target_os = "macos"))]
 fn begin_pause_session() -> Result<Session, String> {
     media::Session::begin().map(Session::Pause)
 }

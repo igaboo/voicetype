@@ -2,7 +2,11 @@
 node_modules
 /build
 /.svelte-kit
-/package
+/dist-electron
+/release-electron
+/native-core/target
+/native-core/sidecar-overlay/.build
+/native-core/sidecar-overlay/.swiftpm
 .env
 .env.*
 !.env.example

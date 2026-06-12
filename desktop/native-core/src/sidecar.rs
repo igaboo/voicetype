@@ -66,8 +66,6 @@ pub enum OutMessage {
         #[serde(rename = "hotkeyLabel")]
         hotkey_label: String,
     },
-    #[allow(dead_code)]
-    Celebrating,
 }
 
 // ---------------------------------------------------------------------------
