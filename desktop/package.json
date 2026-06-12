@@ -1,6 +1,6 @@
 {
   "name": "yap",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Cross-platform voice-to-text tray app",
   "author": "igaboo",
   "type": "module",
@@ -18,6 +18,7 @@
     "electron:build-core": "cargo build --manifest-path native-core/Cargo.toml --release --bin yap-core",
     "electron:build-sidecar": "node scripts/build-sidecar.mjs",
     "electron:package": "pnpm run electron:build && pnpm run electron:build-core && pnpm run electron:build-sidecar && electron-builder --config electron-builder.yml",
+    "electron:package:ci": "pnpm run electron:build && pnpm run electron:build-core && pnpm run electron:build-sidecar && electron-builder --config electron-builder.yml --publish never",
     "electron:check": "tsc --noEmit --project tsconfig.electron.json"
   },
   "license": "MIT",
