@@ -6,11 +6,11 @@ This file gives Codex and other coding agents repository context for Yap.
 
 ```bash
 cd desktop
-npm install
-npm run check
-npm run electron:check
-npm run electron:dev
-npm run electron:package
+pnpm install
+pnpm run check
+pnpm run electron:check
+pnpm run electron:dev
+pnpm run electron:package
 ```
 
 User installation should point to GitHub Releases first. These commands are for development and source builds.

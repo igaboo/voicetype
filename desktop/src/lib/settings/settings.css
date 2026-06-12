@@ -33,12 +33,18 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   accent-color: var(--settings-primary);
   font: inherit;
 }
 
-button {
+button,
+input,
+select,
+textarea,
+a,
+label {
   -webkit-app-region: no-drag;
 }
 
@@ -59,6 +65,7 @@ button {
 }
 
 .settings-container.platform-macos {
+  --settings-titlebar-height: 36px;
   --settings-window-top-padding: 36px;
 }
 
@@ -103,6 +110,7 @@ button {
   align-items: center;
   gap: 10px;
   padding: 0 8px 28px;
+  -webkit-app-region: drag;
 }
 
 .app-icon {
@@ -202,7 +210,9 @@ button {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  width: min(100%, 560px);
   max-width: 560px;
+  margin: 0 auto;
 }
 
 .section-body {

@@ -11,6 +11,11 @@ const rendererDevUrl =
 export type WindowLabel = "main" | "settings";
 
 const windows = new Map<WindowLabel, BrowserWindow>();
+let isQuitting = false;
+
+app.on("before-quit", () => {
+  isQuitting = true;
+});
 
 export function getWindow(label: WindowLabel): BrowserWindow | null {
   const window = windows.get(label);
@@ -90,10 +95,13 @@ export async function createSettingsWindow(): Promise<BrowserWindow> {
 
   const window = createFramelessWindow("settings", {
     title: "Yap Settings",
-    width: 1040,
-    height: 760,
-    minWidth: 760,
-    minHeight: 560,
+    width: 860,
+    height: 680,
+    minWidth: 860,
+    minHeight: 680,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
   });
 
   await loadRenderer(window, "settings");
@@ -108,6 +116,9 @@ function createFramelessWindow(
     height: number;
     minWidth: number;
     minHeight: number;
+    resizable?: boolean;
+    maximizable?: boolean;
+    fullscreenable?: boolean;
   }
 ): BrowserWindow {
   const window = new BrowserWindow({
@@ -136,7 +147,7 @@ function createFramelessWindow(
   windows.set(label, window);
 
   window.on("close", (event) => {
-    if (label === "settings") {
+    if (label === "settings" && !isQuitting) {
       event.preventDefault();
       hideAppWindow(label);
     }

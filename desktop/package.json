@@ -3,6 +3,7 @@
   "version": "2.4.1",
   "description": "Cross-platform voice-to-text tray app",
   "type": "module",
+  "packageManager": "pnpm@10.33.2",
   "main": "dist-electron/main/index.js",
   "scripts": {
     "dev": "vite dev",
@@ -10,10 +11,11 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
-    "electron:dev": "concurrently -k -s first -n svelte,electron \"npm run dev\" \"wait-on tcp:1420 && electron-vite dev\"",
-    "electron:build": "npm run build && electron-vite build",
+    "electron:dev": "concurrently -k -s first -n svelte,electron \"pnpm run dev\" \"pnpm run electron:build-core:debug && wait-on tcp:1420 && electron-vite dev\"",
+    "electron:build": "pnpm run build && electron-vite build",
+    "electron:build-core:debug": "cargo build --manifest-path native-core/Cargo.toml --bin yap-core",
     "electron:build-core": "cargo build --manifest-path native-core/Cargo.toml --release --bin yap-core",
-    "electron:package": "npm run electron:build && npm run electron:build-core && electron-builder --config electron-builder.yml",
+    "electron:package": "pnpm run electron:build && pnpm run electron:build-core && electron-builder --config electron-builder.yml",
     "electron:check": "tsc --noEmit --strict --module ESNext --moduleResolution bundler --target ES2022 --types node,electron --skipLibCheck electron/main/*.ts electron/preload/*.ts electron.vite.config.ts"
   },
   "license": "MIT",
@@ -22,6 +24,13 @@
   },
   "overrides": {
     "cookie": "0.7.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-winstaller",
+      "esbuild"
+    ]
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",

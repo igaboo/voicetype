@@ -91,11 +91,11 @@ Most options can be changed from **Settings** in the tray/menu bar app.
 ```bash
 git clone https://github.com/oobagi/yap.git
 cd yap/desktop
-npm install
-npm run check               # Svelte/type checks
-npm run electron:check      # Electron main/preload type checks
-npm run electron:dev        # run the Electron desktop app in development
-npm run electron:package    # create app bundles/installers
+pnpm install
+pnpm run check               # Svelte/type checks
+pnpm run electron:check      # Electron main/preload type checks
+pnpm run electron:dev        # run the Electron desktop app in development
+pnpm run electron:package    # create app bundles/installers
 ```
 
 macOS builds require Xcode Command Line Tools for the Swift/AppKit overlay sidecar. Windows builds require the standard Rust Windows/MSVC toolchain for the native `yap-core` runtime.

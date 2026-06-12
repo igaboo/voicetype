@@ -92,6 +92,9 @@ function desktopMultiWindow() {
         // Use src/ as root so HTML entry paths resolve correctly and
         // output filenames don't include the "src/" prefix.
         root: resolve("src"),
+        // Electron loads packaged HTML through file://, so assets must be
+        // relative to the HTML file rather than rooted at the filesystem root.
+        base: "./",
         plugins: [svelte()],
         define: appBuildMetadata,
         build: {

@@ -9,11 +9,11 @@ https://github.com/oobagi/yap/releases/latest
 ## Commands
 
 ```bash
-npm install
-npm run check
-npm run electron:check
-npm run electron:dev
-npm run electron:package
+pnpm install
+pnpm run check
+pnpm run electron:check
+pnpm run electron:dev
+pnpm run electron:package
 ```
 
 ## Structure

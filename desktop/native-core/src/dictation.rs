@@ -81,6 +81,8 @@ static HOST: once_cell::sync::Lazy<Mutex<Option<Arc<dyn DictationHost>>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 static LEVEL_POLLER_STARTED: AtomicBool = AtomicBool::new(false);
 static RUNNING: AtomicBool = AtomicBool::new(false);
+#[cfg(target_os = "macos")]
+static ACCESSIBILITY_PERMISSION_POLLING: AtomicBool = AtomicBool::new(false);
 
 pub fn start(host: Arc<dyn DictationHost>) -> Result<(), String> {
     let _ = config::load();
@@ -90,29 +92,16 @@ pub fn start(host: Arc<dyn DictationHost>) -> Result<(), String> {
     reset_active_runtime();
 
     hotkey::set_callbacks(on_key_down, on_key_up, on_double_tap);
-    hotkey::set_permission_required_callback(|label| {
-        emit_overlay_permission(
-            "Accessibility Required",
-            &format!("Allow Accessibility access to use the {label} hotkey anywhere."),
-            "Open Settings",
-            true,
-        );
-        emit(
-            "dictation:permission-required",
-            json!({
-                "permission": "accessibility",
-                "hotkeyLabel": label,
-            }),
-        );
-    });
+    hotkey::set_permission_required_callback(on_accessibility_permission_required);
 
     let cfg = config::get();
     let spec = HotkeySpec::parse(&cfg.hotkey);
+    RUNNING.store(true, Ordering::SeqCst);
     hotkey::start(spec);
     start_level_poller();
     spawn_overlay(&cfg);
     set_state(RuntimeState::Idle);
-    emit_overlay_permission("", "", "", false);
+    clear_permission_prompt_if_available();
     start_onboarding_if_needed(&cfg);
     emit(
         "dictation:runtime-started",
@@ -120,11 +109,109 @@ pub fn start(host: Arc<dyn DictationHost>) -> Result<(), String> {
             "hotkey": cfg.hotkey,
         }),
     );
-    RUNNING.store(true, Ordering::SeqCst);
     Ok(())
 }
 
+fn on_accessibility_permission_required(label: String) {
+    emit_overlay_permission(
+        "Accessibility Required",
+        &format!("Allow Accessibility access to use the {label} hotkey anywhere."),
+        "Open Settings",
+        true,
+    );
+    emit(
+        "dictation:permission-required",
+        json!({
+            "permission": "accessibility",
+            "hotkeyLabel": label,
+        }),
+    );
+
+    #[cfg(target_os = "macos")]
+    ensure_accessibility_permission_polling();
+}
+
+#[cfg(target_os = "macos")]
+fn clear_permission_prompt_if_available() {
+    if hotkey::has_accessibility_permission() {
+        emit_overlay_permission("", "", "", false);
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn clear_permission_prompt_if_available() {
+    emit_overlay_permission("", "", "", false);
+}
+
+#[cfg(target_os = "macos")]
+fn on_accessibility_permission_action() {
+    emit(
+        "dictation:permission-requested",
+        json!({ "permission": "accessibility" }),
+    );
+
+    if hotkey::request_accessibility_permission() {
+        finish_accessibility_permission_granted();
+        return;
+    }
+
+    ensure_accessibility_permission_polling();
+}
+
+#[cfg(target_os = "macos")]
+fn ensure_accessibility_permission_polling() {
+    if ACCESSIBILITY_PERMISSION_POLLING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+
+    std::thread::Builder::new()
+        .name("yap-accessibility-permission-wait".into())
+        .spawn(|| {
+            for _ in 0..120 {
+                if !RUNNING.load(Ordering::SeqCst) {
+                    ACCESSIBILITY_PERMISSION_POLLING.store(false, Ordering::SeqCst);
+                    return;
+                }
+                if hotkey::has_accessibility_permission() {
+                    finish_accessibility_permission_granted();
+                    return;
+                }
+                std::thread::sleep(Duration::from_secs(1));
+            }
+
+            ACCESSIBILITY_PERMISSION_POLLING.store(false, Ordering::SeqCst);
+            emit_overlay_permission(
+                "Accessibility Required",
+                "Allow Accessibility access to use the global hotkey anywhere.",
+                "Open Settings",
+                true,
+            );
+        })
+        .ok();
+}
+
+#[cfg(target_os = "macos")]
+fn finish_accessibility_permission_granted() {
+    ACCESSIBILITY_PERMISSION_POLLING.store(false, Ordering::SeqCst);
+    if !RUNNING.load(Ordering::SeqCst) {
+        return;
+    }
+    hotkey::stop();
+    let cfg = config::get();
+    hotkey::start(HotkeySpec::parse(&cfg.hotkey));
+    emit_overlay_permission("", "", "", false);
+    emit(
+        "dictation:permission-granted",
+        json!({ "permission": "accessibility" }),
+    );
+
+    if !cfg.onboarding_complete && onboarding_step().is_none() {
+        set_onboarding_step(Some(OnboardingStep::TryIt));
+    }
+}
+
 pub fn stop() -> Result<(), String> {
+    RUNNING.store(false, Ordering::SeqCst);
     reset_active_runtime();
     set_state(RuntimeState::Idle);
     set_onboarding_step(None);
@@ -133,7 +220,8 @@ pub fn stop() -> Result<(), String> {
     if let Ok(mut host) = HOST.lock() {
         *host = None;
     }
-    RUNNING.store(false, Ordering::SeqCst);
+    #[cfg(target_os = "macos")]
+    ACCESSIBILITY_PERMISSION_POLLING.store(false, Ordering::SeqCst);
     Ok(())
 }
 
@@ -967,12 +1055,7 @@ fn handle_overlay_event(event: String) {
         "pill_click" => on_overlay_pill_click(),
         #[cfg(target_os = "macos")]
         "permission_action" => {
-            if hotkey::request_accessibility_permission() {
-                emit(
-                    "dictation:permission-requested",
-                    json!({ "permission": "accessibility" }),
-                );
-            }
+            on_accessibility_permission_action();
         }
         "pause" => on_overlay_pause(),
         "stop" => on_overlay_stop(),
@@ -1001,7 +1084,11 @@ fn emit_overlay_config(cfg: &AppConfig) {
 #[cfg(target_os = "macos")]
 fn emit_overlay_state(state: String, hands_free: bool, paused: bool) {
     crate::sidecar::send(&crate::sidecar::OutMessage::State {
-        state,
+        state: if paused {
+            "recording".to_string()
+        } else {
+            state
+        },
         hands_free,
         paused,
         elapsed: recording_elapsed_seconds(),

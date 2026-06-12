@@ -352,13 +352,7 @@
         savedConfigSnapshot = configSnapshot();
       }
 
-      const devices = await invokeRuntimeOptional<string[]>('audio.list_devices', undefined, 2500);
-      if (devices) {
-        microphones = devices;
-        if (selectedMic && !devices.includes(selectedMic)) {
-          microphones = [selectedMic, ...devices];
-        }
-      }
+      void loadMicrophones();
     } catch (error) {
       console.error('Failed to load settings', error);
       savedConfigSnapshot = configSnapshot();
@@ -368,10 +362,21 @@
     }
   }
 
+  async function loadMicrophones() {
+    if (!hasNativeRuntime) return;
+
+    const devices = await invokeRuntimeOptional<string[]>('audio.list_devices', undefined, 2500);
+    if (!devices) return;
+
+    microphones = devices;
+    if (selectedMic && !devices.includes(selectedMic)) {
+      microphones = [selectedMic, ...devices];
+    }
+  }
+
   async function refreshConfig() {
-    const wasLoading = loading;
+    if (loading) return;
     await loadConfig();
-    loading = wasLoading;
   }
 
   // ── Save Config ───────────────────────────────────────────────────────
@@ -719,9 +724,11 @@
       return;
     }
 
-    historyEntries = await invokeRuntimeOptional<HistoryEntry[]>('history.get') ?? [];
-
-    historyLoading = false;
+    try {
+      historyEntries = await invokeRuntimeOptional<HistoryEntry[]>('history.get', undefined, 2500) ?? [];
+    } finally {
+      historyLoading = false;
+    }
   }
 
   function providerLabel(tx: string, fmt: string | null): string {
@@ -1064,7 +1071,7 @@
     <div class="settings-body">
       <aside class="settings-sidebar" aria-label="Settings sections">
         <div class="sidebar-header">
-          <img class="app-icon" src="/favicon.png" alt="" aria-hidden="true" />
+          <img class="app-icon" src="./favicon.png" alt="" aria-hidden="true" />
           <div>
             <div class="sidebar-title">Yap</div>
             <a

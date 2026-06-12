@@ -39,6 +39,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: pnpm
+          cache-dependency-path: desktop/pnpm-lock.yaml
+
+      - name: Enable pnpm
+        run: corepack enable
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -57,15 +62,15 @@ jobs:
 
       - name: Install dependencies
         working-directory: desktop
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Check renderer
         working-directory: desktop
-        run: npm run check
+        run: pnpm run check
 
       - name: Check Electron main/preload
         working-directory: desktop
-        run: npm run electron:check
+        run: pnpm run electron:check
 
       - name: Clean previous Electron outputs
         working-directory: desktop
@@ -77,7 +82,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npm run electron:package -- --publish never
+        run: pnpm run electron:package -- --publish never
 
       - name: Upload Electron artifacts
         uses: actions/upload-artifact@v4

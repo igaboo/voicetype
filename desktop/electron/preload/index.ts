@@ -7,6 +7,7 @@ let nextCallbackId = 1;
 let nextListenerId = 1;
 const callbacks = new Map<number, { callback: Callback; once: boolean }>();
 const eventListeners = new Map<number, { event: string; handlerId: number }>();
+const pendingEvents: YapEvent[] = [];
 let updaterDownloadHandler: ((event: YapDownloadEvent) => void) | null = null;
 
 function transformCallback(callback: Callback, once = false): number {
@@ -45,13 +46,19 @@ async function invoke<T = unknown>(command: string, args: Record<string, unknown
 }
 
 ipcRenderer.on("yap:event", (_event, payload: YapEvent) => {
+  let delivered = false;
   for (const [id, listener] of eventListeners) {
     if (listener.event !== payload.event) continue;
+    delivered = true;
     runCallback(listener.handlerId, {
       event: payload.event,
       id,
       payload: payload.payload,
     });
+  }
+  if (!delivered) {
+    pendingEvents.push(payload);
+    if (pendingEvents.length > 50) pendingEvents.shift();
   }
 });
 
@@ -128,6 +135,16 @@ const bridge: YapBridge = {
     listen: async <T>(event: string, handler: (event: YapEvent<T>) => void) => {
       const handlerId = transformCallback(handler as Callback);
       const eventId = await invoke<number>("events.listen", { event, handler: handlerId });
+      for (let index = pendingEvents.length - 1; index >= 0; index -= 1) {
+        const pending = pendingEvents[index];
+        if (pending.event !== event) continue;
+        pendingEvents.splice(index, 1);
+        runCallback(handlerId, {
+          event: pending.event,
+          id: eventId,
+          payload: pending.payload,
+        });
+      }
       return () => {
         eventListeners.delete(eventId);
         unregisterCallback(handlerId);
