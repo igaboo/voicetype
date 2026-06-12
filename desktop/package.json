@@ -18,7 +18,7 @@
     "electron:build-core": "cargo build --manifest-path native-core/Cargo.toml --release --bin yap-core",
     "electron:build-sidecar": "node scripts/build-sidecar.mjs",
     "electron:package": "pnpm run electron:build && pnpm run electron:build-core && pnpm run electron:build-sidecar && electron-builder --config electron-builder.yml",
-    "electron:check": "tsc --noEmit --strict --module ESNext --moduleResolution bundler --target ES2022 --types node,electron --skipLibCheck electron/main/*.ts electron/preload/*.ts electron.vite.config.ts"
+    "electron:check": "tsc --noEmit --project tsconfig.electron.json"
   },
   "license": "MIT",
   "dependencies": {
