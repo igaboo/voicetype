@@ -35,7 +35,7 @@ Gather current state before changing anything:
 - `git status --short --branch`
 - `git tag --sort=-creatordate`
 - `git log --oneline <latest-tag>..HEAD`
-- Current versions in `tauri-app/package.json`, `tauri-app/src-tauri/Cargo.toml`, `tauri-app/src-tauri/tauri.conf.json`, and `SPEC.md`
+- Current versions in `desktop/package.json`, `desktop/pnpm-lock.yaml`, `desktop/native-core/Cargo.toml`, `desktop/native-core/Cargo.lock`, and `SPEC.md`
 - Diff/stat of all uncommitted or branch changes
 - Existing release note style from the latest comparable GitHub Releases
 
@@ -78,11 +78,12 @@ Keep version bumps in the final commit unless the repository convention for that
 Run the repo's relevant checks before PR/merge:
 
 ```bash
-cd tauri-app
-npm run check
-cargo check
-cargo fmt
-npm run build
+cd desktop
+pnpm run electron:check
+pnpm run check
+cargo check --manifest-path native-core/Cargo.toml --bin yap-core
+cargo fmt --check --manifest-path native-core/Cargo.toml
+pnpm run electron:build
 ```
 
 If a command cannot run locally, report why in the PR and final answer.

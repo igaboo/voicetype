@@ -1,46 +1,16 @@
-build/
-.build/
-.swiftpm/
 .DS_Store
 *.tar.gz
-
-# .NET build artifacts
-bin/
-obj/
-*.user
-*.userosscache
-*.sln.docstates
-*.userprefs
-
-# NuGet
-*.nupkg
-*.snupkg
-**/[Pp]ackages/*
-!**/[Pp]ackages/build/
-*.nuget.props
-*.nuget.targets
-
-# Visual Studio
-.vs/
-*.suo
-*.cache
-*.sln.ide/
-launchSettings.json
-
-# Windows build output
-windows/build/
-
-# Inno Setup output
-windows/installer/output/
-
-# Windows-specific
 Thumbs.db
-ehthumbs.db
 Desktop.ini
 *.tmp
 *.bak
 
-# Tauri
-tauri-app/node_modules/
-tauri-app/.svelte-kit/
-tauri-app/src-tauri/target/
+# Electron desktop package outputs
+desktop/node_modules/
+desktop/.svelte-kit/
+desktop/build/
+desktop/dist-electron/
+desktop/release-electron/
+desktop/native-core/target/
+desktop/native-core/sidecar-overlay/.build/
+desktop/native-core/sidecar-overlay/.swiftpm/
