@@ -14,7 +14,10 @@ pnpm run check
 pnpm run electron:check
 pnpm run electron:dev
 pnpm run electron:package
+pnpm run electron:package:ci
 ```
+
+Use `electron:package` for local packaging. Use `electron:package:ci` in GitHub Actions or other automation so Electron Builder does not publish from the build matrix.
 
 ## Structure
 

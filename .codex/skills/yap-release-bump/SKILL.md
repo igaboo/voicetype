@@ -35,7 +35,7 @@ Gather current state before changing anything:
 - `git status --short --branch`
 - `git tag --sort=-creatordate`
 - `git log --oneline <latest-tag>..HEAD`
-- Current versions in `desktop/package.json`, `desktop/pnpm-lock.yaml`, `desktop/native-core/Cargo.toml`, `desktop/native-core/Cargo.lock`, and `SPEC.md`
+- Current versions in `desktop/package.json`, `desktop/native-core/Cargo.toml`, and `desktop/native-core/Cargo.lock`
 - Diff/stat of all uncommitted or branch changes
 - Existing release note style from the latest comparable GitHub Releases
 

@@ -5,11 +5,8 @@
 Update all of these for a release:
 
 - `desktop/package.json`
-- `desktop/pnpm-lock.yaml`
 - `desktop/native-core/Cargo.toml`
 - `desktop/native-core/Cargo.lock`
-- `desktop/electron-builder.yml`
-- `SPEC.md`
 
 Prefer:
 

@@ -11,9 +11,11 @@ pnpm run check
 pnpm run electron:check
 pnpm run electron:dev
 pnpm run electron:package
+pnpm run electron:package:ci
 ```
 
 User installation should point to GitHub Releases first. These commands are for development and source builds.
+Use `electron:package:ci` for CI/tag packaging because it explicitly disables Electron Builder publication; release artifacts are published by the GitHub Actions release job.
 
 The canonical application lives in `desktop/`. Electron is the desktop shell. The old root-level Swift package has been removed; Swift remains only as the macOS overlay sidecar under `desktop/native-core/sidecar-overlay/`.
 
@@ -61,12 +63,13 @@ Hotkey provider
 Config is stored at `~/.config/yap/config.json` on macOS and `%APPDATA%\yap\config.json` on Windows. Important fields include:
 
 - `hotkey`
-- `audio_device`
-- `press_enter_after_paste`
-- `tx_provider`, `tx_api_key`, `tx_model`
-- `fmt_provider`, `fmt_api_key`, `fmt_model`, `fmt_style`
-- `sounds_enabled`, `quiet_audio_while_recording`, `gradient_enabled`, `always_visible_pill`
-- `history_enabled`, `speech_locale`
+- `audioDevice`
+- `pressEnterAfterPaste`
+- `txProvider`, `txApiKey`, `txModel`
+- `fmtProvider`, `fmtApiKey`, `fmtModel`, `fmtStyle`
+- `soundsEnabled`, `quietAudioWhileRecording`, `backgroundAudioMode`
+- `gradientEnabled`, `alwaysVisiblePill`
+- `historyEnabled`, `speechLocale`
 - provider-specific Deepgram, OpenAI, Gemini, and ElevenLabs options
 
 Empty model strings fall back to provider defaults. Formatting falls back to the transcription API key when its own API key is blank.

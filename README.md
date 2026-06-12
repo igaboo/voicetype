@@ -81,6 +81,7 @@ Most options can be changed from **Settings** in the tray/menu bar app.
   "fmtApiKey": "",
   "fmtModel": "",
   "fmtStyle": "formatted",
+  "backgroundAudioMode": "mute",
   "alwaysVisiblePill": true,
   "historyEnabled": true
 }
@@ -96,6 +97,7 @@ pnpm run check               # Svelte/type checks
 pnpm run electron:check      # Electron main/preload type checks
 pnpm run electron:dev        # run the Electron desktop app in development
 pnpm run electron:package    # create app bundles/installers
+pnpm run electron:package:ci # CI packaging without Electron Builder publishing
 ```
 
 macOS builds require Xcode Command Line Tools for the Swift/AppKit overlay sidecar. Windows builds require the standard Rust Windows/MSVC toolchain for the native `yap-core` runtime.
