@@ -76,7 +76,7 @@ fn begin_pause_session() -> Result<Session, String> {
 #[cfg(target_os = "macos")]
 mod media {
     use super::log;
-    use std::process::Command;
+    use std::process::{Command, Stdio};
 
     #[derive(Clone, Copy)]
     struct MediaApp {
@@ -98,8 +98,12 @@ mod media {
         },
     ];
 
+    const MEDIA_PLAYBACK_ASSERTION_MARKERS: &[&str] =
+        &["Media Playback", "Audio Playback", "Playing audio"];
+
     pub struct Session {
         paused_apps: Vec<MediaApp>,
+        media_key_toggled: bool,
     }
 
     impl Session {
@@ -134,11 +138,18 @@ mod media {
                 }
             }
 
+            let mut media_key_toggled = false;
             if paused_apps.is_empty() {
-                log::info("Background audio: no supported playing media app to pause");
+                media_key_toggled = pause_system_media_with_media_key();
+                if !media_key_toggled {
+                    log::info("Background audio: no supported playing media app to pause");
+                }
             }
 
-            Ok(Self { paused_apps })
+            Ok(Self {
+                paused_apps,
+                media_key_toggled,
+            })
         }
 
         pub fn end(self) -> Result<(), String> {
@@ -151,6 +162,14 @@ mod media {
                     )),
                 }
             }
+            if self.media_key_toggled {
+                match send_play_pause() {
+                    Ok(()) => log::info("Background audio: sent media resume"),
+                    Err(error) => log::info(&format!(
+                        "Background audio: could not send media resume: {error}",
+                    )),
+                }
+            }
             Ok(())
         }
     }
@@ -158,13 +177,52 @@ mod media {
     fn is_process_running(process_name: &str) -> bool {
         Command::new("pgrep")
             .args(["-x", process_name])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()
             .map(|status| status.success())
             .unwrap_or(false)
     }
 
+    fn pause_system_media_with_media_key() -> bool {
+        if !has_media_playback_assertion() {
+            return false;
+        }
+
+        match send_play_pause() {
+            Ok(()) => {
+                log::info("Background audio: sent media pause");
+                true
+            }
+            Err(error) => {
+                log::info(&format!(
+                    "Background audio: could not send media pause: {error}",
+                ));
+                false
+            }
+        }
+    }
+
+    fn has_media_playback_assertion() -> bool {
+        let Ok(output) = Command::new("pmset").args(["-g", "assertions"]).output() else {
+            return false;
+        };
+
+        if !output.status.success() {
+            return false;
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        MEDIA_PLAYBACK_ASSERTION_MARKERS
+            .iter()
+            .any(|marker| stdout.contains(marker))
+    }
+
     fn is_playing(app: MediaApp) -> Result<bool, String> {
-        let output = run_script(app, r#"if player state is playing then return "playing" else return "not_playing""#)?;
+        let output = run_script(
+            app,
+            r#"if player state is playing then return "playing" else return "not_playing""#,
+        )?;
         Ok(output.trim() == "playing")
     }
 
@@ -194,6 +252,15 @@ mod media {
         } else {
             Err(stderr)
         }
+    }
+
+    fn send_play_pause() -> Result<(), String> {
+        use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+        let mut enigo = Enigo::new(&Settings::default()).map_err(|e| e.to_string())?;
+        enigo
+            .key(Key::MediaPlayPause, Direction::Click)
+            .map_err(|e| e.to_string())
     }
 }
 
