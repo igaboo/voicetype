@@ -157,9 +157,7 @@ fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<
             commands::delete_all_history()?;
             Ok(Some(json!({ "cleared": true })))
         }
-        "audio.list_devices" => {
-            to_value(commands::audio_device_names()).map(Some)
-        }
+        "audio.list_devices" => to_value(commands::audio_device_names()).map(Some),
         "hotkey_capture.start" => {
             let host: Arc<dyn CommandHost> = host;
             commands::begin_hotkey_capture(host);
