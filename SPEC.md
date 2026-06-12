@@ -16,7 +16,7 @@ This document is the single source of truth for feature parity in the Electron-b
 | macOS bundle ID | `com.yap.desktop` |
 | Windows app ID | `com.yap.desktop` |
 | Version scheme | SemVer: `MAJOR.MINOR.PATCH` |
-| Current version | `2.4.1` |
+| Current version | `3.0.0` |
 | Activation policy | **Background/accessory** -- no Dock icon (macOS `LSUIElement = true`), no taskbar window (Windows: tray-only) |
 
 ---
