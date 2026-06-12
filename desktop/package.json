@@ -1,6 +1,6 @@
 {
   "name": "yap",
-  "version": "2.4.1",
+  "version": "3.0.0",
   "description": "Cross-platform voice-to-text tray app",
   "author": "igaboo",
   "type": "module",
