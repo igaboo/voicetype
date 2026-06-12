@@ -7,6 +7,10 @@ import { YapCoreSidecar } from "./sidecar";
 import { installTray, refreshHistoryMenu } from "./tray";
 import { createMainWindow, hideAppIfNoWindowsVisible, sendToAllWindows, sendToWindow, showAppWindow } from "./windows";
 
+if (process.platform === "darwin") {
+  app.commandLine.appendSwitch("use-mock-keychain");
+}
+
 const sidecar = new YapCoreSidecar({
   appRoot,
   onEvent: handleSidecarEvent,
