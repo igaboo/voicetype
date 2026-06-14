@@ -50,6 +50,7 @@ const HOVER_TOOLTIP_OFFSET_Y: f32 = -24.0;
 const HOVER_TOOLTIP_TRANSITION_Y: f32 = 4.0;
 const CARD_GAP_Y: f32 = 50.0;
 const TIMER_GAP_Y: f32 = 40.0;
+const TIMER_VISIBLE_AFTER_SECONDS: f64 = 10.0;
 const EXPANDED_PILL_SCALE: f32 = 0.82;
 const HOVER_PILL_SCALE: f32 = 0.58;
 const IDLE_PILL_SCALE: f32 = 0.5;
@@ -238,6 +239,7 @@ struct AnimState {
     content_width: Spring,        // Pill content width, including controls
     audio_bounce: Spring,         // Recording scale pulse driven by audio level
     hands_free_progress: Spring,  // 0→1 for pause/stop control entrance
+    timer_opacity: Spring,        // 0→1 for delayed recording timer fade-in
     error_timer: Option<Instant>, // When error was shown
     shake_progress: f32,          // 0→1 for no-speech shake
     shake_active: bool,
@@ -263,6 +265,7 @@ impl AnimState {
             content_width: Spring::new(IDLE_CONTENT_W, 180.0, 22.0),
             audio_bounce: Spring::new(1.0, 160.0, 24.0),
             hands_free_progress: Spring::new(0.0, 180.0, 22.0),
+            timer_opacity: Spring::new(0.0, 180.0, 24.0),
             error_timer: None,
             shake_progress: 0.0,
             shake_active: false,
@@ -328,6 +331,12 @@ impl AnimState {
                 0.0
             },
         );
+        self.timer_opacity
+            .set_target(if show_recording_timer(state) {
+                1.0
+            } else {
+                0.0
+            });
 
         let base_scale = if is_expanded {
             EXPANDED_PILL_SCALE
@@ -455,6 +464,7 @@ impl AnimState {
         self.content_width.tick(dt);
         self.audio_bounce.tick(dt);
         self.hands_free_progress.tick(dt);
+        self.timer_opacity.tick(dt);
     }
 
     fn needs_animation(&self, state: &OverlayState) -> bool {
@@ -469,6 +479,7 @@ impl AnimState {
             || !self.content_width.is_settled()
             || !self.audio_bounce.is_settled()
             || !self.hands_free_progress.is_settled()
+            || !self.timer_opacity.is_settled()
             || !self.pill_opacity.is_settled()
             || self.shake_active
             || self.bar_springs.iter().any(|s| !s.is_settled())
@@ -1358,17 +1369,19 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
         }
     }
 
-    // -- Elapsed time (above pill, hands-free) --
-    if state.mode == "recording" && state.hands_free {
+    // -- Elapsed time (above pill, after the first 10s of recording) --
+    let timer_opacity = anim.timer_opacity.val();
+    if timer_opacity > 0.01 {
         if let Some(ref fr) = font {
             let elapsed_text = format_elapsed(state.elapsed);
+            let alpha = (128.0 * timer_opacity).round().clamp(0.0, 128.0) as u8;
             fr.render_centered(
                 &mut pixmap,
                 &elapsed_text,
                 cx,
-                pill_cy - TIMER_GAP_Y,
+                pill_cy - TIMER_GAP_Y + (1.0 - timer_opacity) * 12.0,
                 11.0,
-                [255, 255, 255, 128],
+                [255, 255, 255, alpha],
             );
         }
     }
@@ -2065,6 +2078,10 @@ fn onboarding_card_text(step: &OnboardingStep, hotkey_label: &str) -> String {
 fn format_elapsed(seconds: f64) -> String {
     let s = seconds as u64;
     format!("{}:{:02}", s / 60, s % 60)
+}
+
+fn show_recording_timer(state: &OverlayState) -> bool {
+    state.mode == "recording" && state.elapsed >= TIMER_VISIBLE_AFTER_SECONDS
 }
 
 // ---------------------------------------------------------------------------

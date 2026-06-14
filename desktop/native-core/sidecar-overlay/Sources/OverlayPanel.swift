@@ -204,7 +204,7 @@ class OverlayPanel: NSPanel {
             overlayState.bandLevels = Array(repeating: 0, count: 11)
             overlayState.isHandsFree = false
             overlayState.isPaused = false
-            overlayState.handsFreeElapsed = elapsed
+            overlayState.recordingElapsed = elapsed
             if wasIdle {
                 alphaValue = 1
                 if !overlayState.alwaysVisible { slideIn() } else { showAtRest() }
@@ -224,7 +224,7 @@ class OverlayPanel: NSPanel {
             }
             overlayState.isHandsFree = handsFree
             overlayState.isPaused = paused
-            overlayState.handsFreeElapsed = elapsed
+            overlayState.recordingElapsed = elapsed
 
         case "processing":
             overlayState.isHandsFree = false
@@ -260,7 +260,7 @@ class OverlayPanel: NSPanel {
         overlayState.audioLevel = level
         overlayState.bandLevels = bars
         if overlayState.mode == .recording {
-            overlayState.handsFreeElapsed = elapsed
+            overlayState.recordingElapsed = elapsed
         }
         updateButtonTargets()
     }
@@ -545,7 +545,7 @@ class OverlayState: ObservableObject {
     @Published var isHovering: Bool = false
     @Published var gradientEnabled: Bool = true
     @Published var alwaysVisible: Bool = true
-    @Published var handsFreeElapsed: TimeInterval = 0
+    @Published var recordingElapsed: TimeInterval = 0
     var onPermissionAction: (() -> Void)?
     var onPauseResume: (() -> Void)?
     var onStop: (() -> Void)?
@@ -623,8 +623,8 @@ struct OverlayView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
                     }
 
-                    if state.mode == .recording && state.isHandsFree {
-                        Text(formatElapsed(state.handsFreeElapsed))
+                    if showRecordingTimer {
+                        Text(formatElapsed(state.recordingElapsed))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundColor(.white.opacity(0.5))
                             .fixedSize()
@@ -691,6 +691,7 @@ struct OverlayView: View {
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.onboardingStep)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.mode)
                 .animation(.spring(response: 0.45, dampingFraction: 0.7), value: state.mode == .recording && state.isHandsFree)
+                .animation(.easeOut(duration: 0.35), value: showRecordingTimer)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: stackYOffset)
 
                 Spacer().frame(height: OverlayLayout.bottomSpacerHeight)
@@ -708,6 +709,10 @@ struct OverlayView: View {
     private var pillScale: CGFloat {
         if isExpanded { return 0.82 }
         return state.isHovering ? 0.58 : 0.5
+    }
+
+    private var showRecordingTimer: Bool {
+        state.mode == .recording && state.recordingElapsed >= OverlayLayout.recordingTimerVisibleAfter
     }
 
     private func formatElapsed(_ seconds: TimeInterval) -> String {

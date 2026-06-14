@@ -67,6 +67,10 @@ static RUNTIME: once_cell::sync::Lazy<Mutex<RuntimeState>> =
     once_cell::sync::Lazy::new(|| Mutex::new(RuntimeState::Idle));
 static RECORDING_STARTED_AT: once_cell::sync::Lazy<Mutex<Option<Instant>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
+static RECORDING_PAUSED_AT: once_cell::sync::Lazy<Mutex<Option<Instant>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+static RECORDING_PAUSED_DURATION: once_cell::sync::Lazy<Mutex<Duration>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(Duration::ZERO));
 static PEAK_LEVEL: once_cell::sync::Lazy<Mutex<f32>> =
     once_cell::sync::Lazy::new(|| Mutex::new(0.0));
 static ONBOARDING_STEP: once_cell::sync::Lazy<Mutex<Option<OnboardingStep>>> =
@@ -172,9 +176,7 @@ fn reset_active_runtime() {
         let _ = audio::stop_recording();
         audio_ducking::end();
     }
-    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-        *started_at = None;
-    }
+    clear_recording_clock();
     if let Ok(mut peak) = PEAK_LEVEL.lock() {
         *peak = 0.0;
     }
@@ -223,9 +225,7 @@ fn begin_press_to_record() -> bool {
     if let Ok(mut peak) = PEAK_LEVEL.lock() {
         *peak = 0.0;
     }
-    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-        *started_at = Some(Instant::now());
-    }
+    start_recording_clock();
     if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
         *active_hands_free = false;
     }
@@ -257,9 +257,7 @@ fn begin_hands_free_recording(ignore_pending_key_up: bool) -> bool {
     }
 
     let generation = next_recording_generation();
-    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-        *started_at = Some(Instant::now());
-    }
+    start_recording_clock();
     if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
         *active_hands_free = true;
     }
@@ -292,9 +290,7 @@ fn start_recording_for_generation(generation: u64, hands_free: bool) -> bool {
 
     match audio::start_recording((!device.is_empty()).then_some(device)) {
         Ok(_) => {
-            if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-                *started_at = Some(Instant::now());
-            }
+            start_recording_clock();
             if let Ok(mut active_hands_free) = HANDS_FREE_RECORDING.lock() {
                 *active_hands_free = hands_free;
             }
@@ -349,14 +345,9 @@ fn on_key_up() {
         return;
     }
 
-    let started_at = RECORDING_STARTED_AT.lock().ok().and_then(|guard| *guard);
     let peak = current_peak_level();
-    if started_at.is_some_and(|started| started.elapsed().as_millis() < 500)
-        && peak < SILENCE_PEAK_THRESHOLD
-    {
-        if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-            *started_at = None;
-        }
+    if recording_elapsed_duration().as_millis() < 500 && peak < SILENCE_PEAK_THRESHOLD {
+        clear_recording_clock();
         let _ = audio::stop_recording();
         audio_ducking::end();
         begin_tap_pending("too short / quiet", false);
@@ -420,10 +411,12 @@ fn on_overlay_pause() {
     match state() {
         RuntimeState::Recording if is_hands_free_recording() => {
             audio::pause_recording();
+            pause_recording_clock();
             set_state(RuntimeState::Paused);
         }
         RuntimeState::Paused => {
             audio::resume_recording();
+            resume_recording_clock();
             set_state(RuntimeState::Recording);
         }
         _ => {}
@@ -550,9 +543,7 @@ fn finalize_onboarding() {
 
 fn stop_and_process() {
     set_state(RuntimeState::Processing);
-    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
-        *started_at = None;
-    }
+    clear_recording_clock();
     let wav_path = match audio::stop_recording() {
         Ok(path) => path,
         Err(error) => {
@@ -786,6 +777,12 @@ fn set_state(next: RuntimeState) {
         }
         if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
             *started_at = None;
+        }
+        if let Ok(mut paused_at) = RECORDING_PAUSED_AT.lock() {
+            *paused_at = None;
+        }
+        if let Ok(mut paused_duration) = RECORDING_PAUSED_DURATION.lock() {
+            *paused_duration = Duration::ZERO;
         }
         if let Ok(mut peak) = PEAK_LEVEL.lock() {
             *peak = 0.0;
@@ -1179,12 +1176,73 @@ fn emit_overlay_permission(_title: &str, _message: &str, _action_label: &str, _v
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 fn recording_elapsed_seconds() -> f64 {
+    recording_elapsed_duration().as_secs_f64()
+}
+
+fn start_recording_clock() {
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = Some(Instant::now());
+    }
+    if let Ok(mut paused_at) = RECORDING_PAUSED_AT.lock() {
+        *paused_at = None;
+    }
+    if let Ok(mut paused_duration) = RECORDING_PAUSED_DURATION.lock() {
+        *paused_duration = Duration::ZERO;
+    }
+}
+
+fn clear_recording_clock() {
+    if let Ok(mut started_at) = RECORDING_STARTED_AT.lock() {
+        *started_at = None;
+    }
+    if let Ok(mut paused_at) = RECORDING_PAUSED_AT.lock() {
+        *paused_at = None;
+    }
+    if let Ok(mut paused_duration) = RECORDING_PAUSED_DURATION.lock() {
+        *paused_duration = Duration::ZERO;
+    }
+}
+
+fn pause_recording_clock() {
+    if let Ok(mut paused_at) = RECORDING_PAUSED_AT.lock() {
+        if paused_at.is_none() {
+            *paused_at = Some(Instant::now());
+        }
+    }
+}
+
+fn resume_recording_clock() {
+    let paused_at = RECORDING_PAUSED_AT
+        .lock()
+        .ok()
+        .and_then(|mut paused_at| paused_at.take());
+    if let Some(paused_at) = paused_at {
+        if let Ok(mut paused_duration) = RECORDING_PAUSED_DURATION.lock() {
+            *paused_duration += paused_at.elapsed();
+        }
+    }
+}
+
+fn recording_elapsed_duration() -> Duration {
     RECORDING_STARTED_AT
         .lock()
         .ok()
         .and_then(|started_at| *started_at)
-        .map(|started_at| started_at.elapsed().as_secs_f64())
-        .unwrap_or(0.0)
+        .map(|started_at| {
+            let mut paused_duration = RECORDING_PAUSED_DURATION
+                .lock()
+                .map(|duration| *duration)
+                .unwrap_or(Duration::ZERO);
+            if let Some(paused_at) = RECORDING_PAUSED_AT
+                .lock()
+                .ok()
+                .and_then(|paused_at| *paused_at)
+            {
+                paused_duration += paused_at.elapsed();
+            }
+            started_at.elapsed().saturating_sub(paused_duration)
+        })
+        .unwrap_or(Duration::ZERO)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
