@@ -4,7 +4,7 @@ import { basename, join, resolve } from "node:path";
 
 const outputDir = resolve("release-electron");
 const requireTrustedSigning =
-  process.env.YAP_REQUIRE_MAC_SIGNING === "1" || process.env.GITHUB_REF?.startsWith("refs/tags/v");
+  process.env.YAP_REQUIRE_MAC_TRUSTED_SIGNING === "1" || process.env.YAP_REQUIRE_MAC_SIGNING === "1";
 const requiredEntitlements = [
   "com.apple.security.device.audio-input",
   "com.apple.security.personal-information.speech-recognition",
@@ -66,7 +66,9 @@ function verifyTrustedMacSignature(appPath) {
   const signatureDetails = capture("codesign", ["-dv", "--verbose=4", appPath]);
 
   if (/^Signature=adhoc$/m.test(signatureDetails)) {
-    fail("Yap.app is ad-hoc signed. Release builds need a Developer ID Application certificate.");
+    fail(
+      "Yap.app is ad-hoc signed. macOS auto-update release builds need a Developer ID Application certificate."
+    );
   }
 
   if (!/^Authority=Developer ID Application:/m.test(signatureDetails)) {
@@ -75,7 +77,7 @@ function verifyTrustedMacSignature(appPath) {
 
   const teamIdentifier = signatureDetails.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim();
   if (!teamIdentifier || teamIdentifier === "not set") {
-    fail("Yap.app has no TeamIdentifier. Release builds need a trusted Apple signing identity.");
+    fail("Yap.app has no TeamIdentifier. macOS auto-update release builds need a trusted Apple signing identity.");
   }
 
   try {
@@ -83,7 +85,7 @@ function verifyTrustedMacSignature(appPath) {
       stdio: "inherit",
     });
   } catch {
-    fail("Gatekeeper rejected Yap.app. Release builds need successful notarization/stapling.");
+    fail("Gatekeeper rejected Yap.app. macOS auto-update release builds need successful notarization/stapling.");
   }
 }
 
