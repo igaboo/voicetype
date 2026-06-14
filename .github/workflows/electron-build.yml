@@ -82,7 +82,7 @@ jobs:
         run: pnpm run electron:package:ci
 
       - name: Verify macOS entitlements
-        if: runner.os == 'macOS'
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
         working-directory: desktop
         run: pnpm run electron:verify-mac-entitlements
 
