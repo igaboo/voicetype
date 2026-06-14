@@ -35,7 +35,6 @@ export interface YapBridge {
   };
   app: {
     getInfo(): Promise<YapInfo>;
-    relaunch(): Promise<void>;
   };
   windows: {
     openSettings(): Promise<void>;

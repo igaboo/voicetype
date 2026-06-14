@@ -1,5 +1,6 @@
 import { app, type WebContents } from "electron";
 import electronUpdater from "electron-updater";
+import { allowWindowCloseForQuit } from "./windows";
 
 const { autoUpdater } = electronUpdater;
 
@@ -20,6 +21,7 @@ export async function downloadAndInstallElectronUpdate(sender: WebContents): Pro
   if (!app.isPackaged) return null;
 
   let transferred = 0;
+  console.info("[yap-updater] starting update download");
   sender.send("yap:updater-download", {
     event: "Started",
     data: {},
@@ -45,15 +47,29 @@ export async function downloadAndInstallElectronUpdate(sender: WebContents): Pro
     };
     const onDownloaded = () => {
       cleanup();
+      console.info("[yap-updater] update download completed");
       sender.send("yap:updater-download", {
         event: "Finished",
         data: {},
       });
-      autoUpdater.quitAndInstall(false, true);
+      allowWindowCloseForQuit();
+      try {
+        console.info("[yap-updater] calling quitAndInstall");
+        autoUpdater.quitAndInstall(false, true);
+      } catch (error) {
+        console.error("[yap-updater] quitAndInstall failed:", error);
+        reject(error);
+        return;
+      }
+      setTimeout(() => {
+        console.warn("[yap-updater] quitAndInstall did not exit promptly; falling back to app.quit");
+        app.quit();
+      }, 5000).unref();
       resolve(null);
     };
     const onError = (error: Error) => {
       cleanup();
+      console.error("[yap-updater] update install failed:", error);
       reject(error);
     };
 

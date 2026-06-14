@@ -75,7 +75,6 @@ const bridge: YapBridge = {
   },
   app: {
     getInfo: () => ipcRenderer.invoke("yap:app-info") as Promise<YapInfo>,
-    relaunch: () => invoke("app.relaunch"),
   },
   windows: {
     openSettings: () => invoke("window.open_settings"),

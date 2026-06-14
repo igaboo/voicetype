@@ -81,6 +81,11 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: ${{ startsWith(github.ref, 'refs/tags/v') && 'true' || 'false' }}
         run: pnpm run electron:package:ci
 
+      - name: Verify macOS entitlements
+        if: runner.os == 'macOS' && startsWith(github.ref, 'refs/tags/v')
+        working-directory: desktop
+        run: pnpm run electron:verify-mac-entitlements
+
       - name: Upload Electron artifacts
         uses: actions/upload-artifact@v4
         with:

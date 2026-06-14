@@ -3,26 +3,39 @@ import { sendToWindow } from "./windows";
 
 let captureContents: WebContents | null = null;
 let captureHandler: ((event: Electron.Event, input: Input) => void) | null = null;
+let pressedParts = new Set<string>();
+let lastShortcut = "";
 
 export function startHotkeyCapture(webContents: WebContents): void {
   cancelHotkeyCapture();
   captureContents = webContents;
+  pressedParts = new Set();
+  lastShortcut = "";
   captureHandler = (event, input) => {
-    if (input.type !== "keyDown") return;
-
-    const shortcut = shortcutFromInput(input);
-    if (!shortcut) return;
+    if (input.type !== "keyDown" && input.type !== "keyUp") return;
 
     event.preventDefault();
-    sendToWindow("settings", "settings:hotkey-preview", shortcut);
 
-    if (shortcut === "escape") {
+    const key = normalizeKey(input.key);
+    if (input.type === "keyDown" && key === "escape") {
       cancelHotkeyCapture();
       return;
     }
 
-    sendToWindow("settings", "settings:hotkey-captured", shortcut);
-    cancelHotkeyCapture();
+    updatePressedParts(input, key);
+
+    if (input.type === "keyDown") {
+      const shortcut = shortcutFromPressedParts();
+      if (!shortcut) return;
+      lastShortcut = shortcut;
+      sendToWindow("settings", "settings:hotkey-preview", shortcut);
+      return;
+    }
+
+    if (pressedParts.size === 0 && lastShortcut) {
+      sendToWindow("settings", "settings:hotkey-captured", lastShortcut);
+      cancelHotkeyCapture();
+    }
   };
 
   captureContents.on("before-input-event", captureHandler);
@@ -34,19 +47,38 @@ export function cancelHotkeyCapture(): void {
   }
   captureContents = null;
   captureHandler = null;
+  pressedParts = new Set();
+  lastShortcut = "";
 }
 
-function shortcutFromInput(input: Input): string {
-  const parts: string[] = [];
-  if (input.control) parts.push("ctrl");
-  if (input.meta) parts.push("cmd");
-  if (input.alt) parts.push("option");
-  if (input.shift) parts.push("shift");
+function updatePressedParts(input: Input, key: string): void {
+  syncModifier("cmd", input.meta);
+  syncModifier("ctrl", input.control);
+  syncModifier("option", input.alt);
+  syncModifier("shift", input.shift);
 
-  const key = normalizeKey(input.key);
-  if (key && !parts.includes(key)) parts.push(key);
+  if (!key) return;
 
-  return parts.join("+");
+  if (input.type === "keyDown") {
+    pressedParts.add(key);
+  } else {
+    pressedParts.delete(key);
+  }
+}
+
+function syncModifier(part: string, pressed: boolean): void {
+  if (pressed) {
+    pressedParts.add(part);
+  } else {
+    pressedParts.delete(part);
+  }
+}
+
+function shortcutFromPressedParts(): string {
+  const modifierOrder = ["cmd", "ctrl", "option", "shift"];
+  const modifiers = modifierOrder.filter((modifier) => pressedParts.has(modifier));
+  const triggers = [...pressedParts].filter((part) => !modifierOrder.includes(part));
+  return [...modifiers, ...triggers].join("+");
 }
 
 function normalizeKey(key: string): string {

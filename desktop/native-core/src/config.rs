@@ -225,10 +225,7 @@ pub fn load() -> Result<AppConfig, String> {
 
     let config = if path.exists() {
         let data = fs::read_to_string(&path).map_err(|e| format!("failed to read config: {e}"))?;
-        serde_json::from_str::<AppConfig>(&data).unwrap_or_else(|_| {
-            // File exists but is malformed -- fall back to defaults.
-            AppConfig::default()
-        })
+        serde_json::from_str(&data).unwrap_or_else(|_| AppConfig::default())
     } else {
         let config = AppConfig::default();
         // Write defaults so the file exists for the user to inspect.
