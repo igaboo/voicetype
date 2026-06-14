@@ -38,4 +38,5 @@ enum OverlayLayout {
 
     static let hoverTooltipYOffset: CGFloat = -24
     static let hoverTooltipTransitionYOffset: CGFloat = 4
+    static let recordingTimerVisibleAfter: TimeInterval = 10
 }
