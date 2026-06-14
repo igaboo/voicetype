@@ -14,6 +14,8 @@ export interface RuntimeDownloadEvent {
 
 export interface RuntimeUpdate {
   version: string;
+  canInstallInApp: boolean;
+  releaseUrl?: string;
   downloadAndInstall(onEvent?: (event: RuntimeDownloadEvent) => void): Promise<void>;
 }
 

@@ -5,6 +5,15 @@ import { allowWindowCloseForQuit } from "./windows";
 
 const { autoUpdater } = electronUpdater;
 const INSTALL_HANDOFF_TIMEOUT_MS = 120_000;
+const GITHUB_RELEASES_URL = "https://github.com/oobagi/yap/releases/latest";
+const GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/oobagi/yap/releases/latest";
+const RELEASE_CHECK_TIMEOUT_MS = 15_000;
+
+type ElectronUpdate = {
+  version: string;
+  canInstallInApp: boolean;
+  releaseUrl?: string;
+};
 
 type DownloadProgress = {
   total?: number;
@@ -24,20 +33,29 @@ type UpdateInfoWithFiles = {
   path?: string;
 };
 
+type GitHubReleaseInfo = {
+  tag_name?: string;
+  html_url?: string;
+};
+
 export function configureUpdater(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
   autoUpdater.autoRunAppAfterInstall = true;
 }
 
-export async function checkForElectronUpdate(): Promise<{ version: string } | null> {
+export async function checkForElectronUpdate(): Promise<ElectronUpdate | null> {
   if (!app.isPackaged) return null;
+
+  if (!canUseInAppInstaller()) {
+    return checkLatestGitHubRelease();
+  }
 
   const result = await autoUpdater.checkForUpdates();
   if (!result?.isUpdateAvailable) return null;
 
   const version = result?.updateInfo?.version;
-  return version ? { version } : null;
+  return version ? { version, canInstallInApp: true } : null;
 }
 
 export async function downloadAndInstallElectronUpdate(sender: WebContents): Promise<null> {
@@ -173,10 +191,22 @@ function normalizeError(error: unknown): Error {
 }
 
 function assertCanUseInAppInstaller(): void {
-  if (process.platform !== "darwin") return;
+  if (canUseInAppInstaller()) return;
 
+  throw new Error(
+    "This copy of Yap is unsigned, so it cannot install macOS updates in-app. Download the latest release from GitHub Releases."
+  );
+}
+
+function canUseInAppInstaller(): boolean {
+  if (process.platform !== "darwin") return true;
+
+  return hasDeveloperIdSignature();
+}
+
+function hasDeveloperIdSignature(): boolean {
   const appBundlePath = macAppBundlePath();
-  if (!appBundlePath) return;
+  if (!appBundlePath) return true;
 
   let signatureDetails: string;
   try {
@@ -188,16 +218,69 @@ function assertCanUseInAppInstaller(): void {
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(signatureDetails);
   } catch (error) {
-    throw new Error(
-      `This copy of Yap cannot use in-app updates because macOS could not verify its signature: ${normalizeError(error).message}`
+    console.warn(
+      `[yap-updater] macOS signature check failed; using manual update mode: ${normalizeError(error).message}`
     );
+    return false;
   }
 
-  if (!/^Authority=Developer ID Application:/m.test(signatureDetails)) {
-    throw new Error(
-      "This copy of Yap is not signed for in-app updates. Install the latest signed release manually once, then in-app updates will work."
-    );
+  return /^Authority=Developer ID Application:/m.test(signatureDetails);
+}
+
+async function checkLatestGitHubRelease(): Promise<ElectronUpdate | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), RELEASE_CHECK_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Yap updater",
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
+    }
+
+    const release = (await response.json()) as GitHubReleaseInfo;
+    const version = normalizeVersion(release.tag_name);
+    if (!version || compareVersions(version, app.getVersion()) <= 0) return null;
+
+    return {
+      version,
+      canInstallInApp: false,
+      releaseUrl: release.html_url ?? GITHUB_RELEASES_URL,
+    };
+  } finally {
+    clearTimeout(timeout);
   }
+}
+
+function normalizeVersion(value: string | undefined): string | null {
+  const version = value?.trim().replace(/^v/i, "");
+  return version && /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version) ? version : null;
+}
+
+function compareVersions(left: string, right: string): number {
+  const leftParts = parseVersionParts(left);
+  const rightParts = parseVersionParts(right);
+
+  for (let index = 0; index < 3; index += 1) {
+    const delta = leftParts[index] - rightParts[index];
+    if (delta !== 0) return delta;
+  }
+
+  return 0;
+}
+
+function parseVersionParts(version: string): [number, number, number] {
+  const [major = "0", minor = "0", patch = "0"] = version.split(/[+-]/)[0].split(".");
+  return [major, minor, patch].map((part) => Number.parseInt(part, 10) || 0) as [
+    number,
+    number,
+    number,
+  ];
 }
 
 function macAppBundlePath(): string | null {

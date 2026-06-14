@@ -30,7 +30,6 @@ mac:
   icon: native-core/icons/icon.icns
   entitlements: electron/entitlements.mac.plist
   entitlementsInherit: electron/entitlements.mac.inherit.plist
-  notarize: true
   extendInfo:
     NSMicrophoneUsageDescription: Yap records your voice so it can transcribe and paste what you say.
     NSSpeechRecognitionUsageDescription: Yap uses speech recognition to transcribe audio locally when available.
