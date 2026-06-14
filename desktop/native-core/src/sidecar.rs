@@ -188,11 +188,7 @@ fn resolve_sidecar_binary() -> Option<PathBuf> {
         "yap-overlay-x86_64-apple-darwin"
     };
 
-    let mut candidates = vec![
-        manifest_dir.join("sidecar-overlay/.build/debug/yap-overlay"),
-        manifest_dir.join("sidecar-overlay/.build/release/yap-overlay"),
-        manifest_dir.join("binaries").join(architecture_binary),
-    ];
+    let mut candidates = Vec::new();
 
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(parent) = current_exe.parent() {
@@ -200,6 +196,12 @@ fn resolve_sidecar_binary() -> Option<PathBuf> {
             candidates.push(parent.join(architecture_binary));
         }
     }
+
+    candidates.extend([
+        manifest_dir.join("binaries").join(architecture_binary),
+        manifest_dir.join("sidecar-overlay/.build/release/yap-overlay"),
+        manifest_dir.join("sidecar-overlay/.build/debug/yap-overlay"),
+    ]);
 
     candidates.into_iter().find(|path| path.exists())
 }
