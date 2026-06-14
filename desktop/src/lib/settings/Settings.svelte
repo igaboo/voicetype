@@ -150,6 +150,7 @@
   let updateVersion = $state('');
   let updateDownloaded = $state(0);
   let updateTotal = $state<number | null>(null);
+  let updatePercent = $state<number | null>(null);
   let pendingUpdate: RuntimeUpdate | null = null;
 
   // ── Derived ───────────────────────────────────────────────────────────
@@ -698,14 +699,28 @@
 
   function updateProgress(): number {
     if (updateStatus === 'ready') return 100;
+    if (updatePercent !== null) return clampPercent(updatePercent);
     if (!updateTotal || updateTotal <= 0) return 0;
-    return Math.max(0, Math.min(100, Math.round((updateDownloaded / updateTotal) * 100)));
+    return clampPercent((updateDownloaded / updateTotal) * 100);
   }
 
   function updateProgressLabel(): string {
-    if (updateStatus === 'ready') return 'Installed';
+    if (updateStatus === 'ready') return 'Installing';
+    if (!updateTotal && updatePercent !== null) return `${updateProgress()}%`;
     if (!updateTotal) return formatBytes(updateDownloaded);
     return `${formatBytes(updateDownloaded)} of ${formatBytes(updateTotal)}`;
+  }
+
+  function clampPercent(value: number): number {
+    return Math.max(0, Math.min(100, Math.round(value)));
+  }
+
+  function positiveNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+  }
+
+  function nonNegativeNumber(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
   }
 
   function formatBytes(bytes: number): string {
@@ -733,6 +748,7 @@
     updateVersion = '';
     updateDownloaded = 0;
     updateTotal = null;
+    updatePercent = null;
     updateStatus = 'checking';
     updateMessage = 'Checking for updates...';
 
@@ -770,19 +786,28 @@
     updateStatus = 'downloading';
     updateDownloaded = 0;
     updateTotal = null;
+    updatePercent = null;
     updateMessage = `Downloading Yap ${version}...`;
 
     try {
       const update = pendingUpdate;
       await update.downloadAndInstall((event: RuntimeDownloadEvent) => {
+        const data = event.data ?? {};
         if (event.event === 'Started') {
-          updateTotal = event.data?.contentLength ?? null;
+          updateTotal = positiveNumber(data.total ?? data.contentLength);
           updateDownloaded = 0;
+          updatePercent = null;
         } else if (event.event === 'Progress') {
-          updateDownloaded += event.data?.chunkLength ?? 0;
+          updateTotal = positiveNumber(data.total ?? data.contentLength) ?? updateTotal;
+          updateDownloaded =
+            nonNegativeNumber(data.transferred) ?? updateDownloaded + (data.chunkLength ?? 0);
+          updatePercent = nonNegativeNumber(data.percent) ?? updatePercent;
         } else if (event.event === 'Finished') {
+          updateTotal = positiveNumber(data.total ?? data.contentLength) ?? updateTotal;
+          updateDownloaded = nonNegativeNumber(data.transferred) ?? updateDownloaded;
+          updatePercent = 100;
           updateStatus = 'ready';
-          updateMessage = 'Update installed. Restarting Yap...';
+          updateMessage = 'Download finished. Installing update...';
         }
       });
     } catch (error) {
@@ -1549,7 +1574,7 @@
               {#if updateStatus === 'downloading' || updateStatus === 'ready'}
                 <div class="update-progress" aria-label="Update progress">
                   <div class="update-progress-header">
-                    <span>{updateStatus === 'ready' ? 'Installed' : 'Downloading'}</span>
+                    <span>{updateStatus === 'ready' ? 'Installing' : 'Downloading'}</span>
                     <span>{updateProgressLabel()}</span>
                   </div>
                   <div class="update-progress-track">
