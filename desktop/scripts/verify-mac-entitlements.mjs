@@ -3,7 +3,10 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 const outputDir = resolve("release-electron");
-const requiredEntitlements = ["com.apple.security.device.audio-input"];
+const requiredEntitlements = [
+  "com.apple.security.device.audio-input",
+  "com.apple.security.personal-information.speech-recognition",
+];
 
 if (process.platform !== "darwin") {
   console.log("Skipping macOS entitlement verification on non-macOS host.");
@@ -15,10 +18,17 @@ if (!appPath) {
   console.error(`Packaged Yap.app not found under: ${outputDir}`);
   process.exit(1);
 }
+const binDir = join(appPath, "Contents/Resources/bin");
+const speechHelper = findBinary(binDir, /^yap-speech-.*-apple-darwin$/);
+if (!speechHelper) {
+  console.error(`Packaged yap-speech helper not found under: ${binDir}`);
+  process.exit(1);
+}
 
 const targets = [
   { label: "Yap.app", path: appPath },
-  { label: "yap-core", path: join(appPath, "Contents/Resources/bin/yap-core") },
+  { label: "yap-core", path: join(binDir, "yap-core") },
+  { label: "yap-speech", path: speechHelper },
 ];
 
 for (const target of targets) {
@@ -50,6 +60,13 @@ function findNewestAppBundle(root) {
   const bundles = findAppBundles(root);
   bundles.sort((left, right) => statSync(right).mtimeMs - statSync(left).mtimeMs);
   return bundles[0] ?? null;
+}
+
+function findBinary(root, pattern) {
+  if (!existsSync(root)) return null;
+  return readdirSync(root)
+    .map((name) => join(root, name))
+    .find((path) => pattern.test(basename(path)) && existsSync(path)) ?? null;
 }
 
 function findAppBundles(root) {
