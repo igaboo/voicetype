@@ -26,7 +26,6 @@
     listenRuntimeEvent,
     onRuntimeFocusChanged,
     openExternal,
-    relaunchRuntime,
     setAutostartEnabled,
     type RuntimeDownloadEvent,
     type RuntimeUpdate,
@@ -786,8 +785,6 @@
           updateMessage = 'Update installed. Restarting Yap...';
         }
       });
-
-      await relaunchRuntime();
     } catch (error) {
       updateStatus = 'error';
       updateMessage = updaterErrorMessage(error);
