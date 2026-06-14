@@ -5,6 +5,10 @@ export interface RuntimeDownloadEvent {
   data?: {
     contentLength?: number;
     chunkLength?: number;
+    transferred?: number;
+    total?: number;
+    percent?: number;
+    bytesPerSecond?: number;
   };
 }
 

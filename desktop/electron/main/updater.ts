@@ -1,12 +1,33 @@
+import { spawnSync } from "node:child_process";
 import { app, type WebContents } from "electron";
 import electronUpdater from "electron-updater";
 import { allowWindowCloseForQuit } from "./windows";
 
 const { autoUpdater } = electronUpdater;
+const INSTALL_HANDOFF_TIMEOUT_MS = 120_000;
+
+type DownloadProgress = {
+  total?: number;
+  transferred?: number;
+  delta?: number;
+  percent?: number;
+  bytesPerSecond?: number;
+};
+
+type UpdateFileInfo = {
+  url?: string;
+  size?: number;
+};
+
+type UpdateInfoWithFiles = {
+  files?: UpdateFileInfo[];
+  path?: string;
+};
 
 export function configureUpdater(): void {
   autoUpdater.autoDownload = false;
-  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.autoRunAppAfterInstall = true;
 }
 
 export async function checkForElectronUpdate(): Promise<{ version: string } | null> {
@@ -21,68 +42,167 @@ export async function checkForElectronUpdate(): Promise<{ version: string } | nu
 
 export async function downloadAndInstallElectronUpdate(sender: WebContents): Promise<null> {
   if (!app.isPackaged) return null;
+  assertCanUseInAppInstaller();
 
   const result = await autoUpdater.checkForUpdates();
   if (!result?.isUpdateAvailable) {
     throw new Error("No update is available to install. Check for updates again.");
   }
 
+  const contentLength = updateContentLength(result.updateInfo);
   let transferred = 0;
   console.info("[yap-updater] starting update download");
   sender.send("yap:updater-download", {
     event: "Started",
-    data: {},
+    data: {
+      contentLength,
+      total: contentLength,
+    },
   });
 
   return new Promise((resolve, reject) => {
-    const cleanup = () => {
+    let settled = false;
+    let installTimer: NodeJS.Timeout | undefined;
+
+    const cleanupDownloadListeners = () => {
       autoUpdater.off("download-progress", onProgress);
       autoUpdater.off("update-downloaded", onDownloaded);
-      autoUpdater.off("error", onError);
     };
-    const onProgress = (progress: { total?: number; transferred?: number }) => {
+    const cleanup = () => {
+      cleanupDownloadListeners();
+      autoUpdater.off("error", onError);
+      app.off("before-quit", onBeforeQuit);
+      if (installTimer) {
+        clearTimeout(installTimer);
+        installTimer = undefined;
+      }
+    };
+    const resolveOnce = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(null);
+    };
+    const rejectOnce = (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const onBeforeQuit = () => {
+      console.info("[yap-updater] app is quitting for update install");
+      resolveOnce();
+    };
+    const onProgress = (progress: DownloadProgress) => {
       const nextTransferred = progress.transferred ?? transferred;
-      const chunkLength = Math.max(0, nextTransferred - transferred);
+      const chunkLength = Math.max(0, progress.delta ?? nextTransferred - transferred);
       transferred = nextTransferred;
       sender.send("yap:updater-download", {
         event: "Progress",
         data: {
           contentLength: progress.total,
           chunkLength,
+          transferred: nextTransferred,
+          total: progress.total,
+          percent: progress.percent,
+          bytesPerSecond: progress.bytesPerSecond,
         },
       });
     };
     const onDownloaded = () => {
-      cleanup();
+      cleanupDownloadListeners();
       console.info("[yap-updater] update download completed");
       sender.send("yap:updater-download", {
         event: "Finished",
-        data: {},
+        data: {
+          contentLength,
+          total: contentLength,
+          transferred,
+          percent: 100,
+        },
       });
       allowWindowCloseForQuit();
       try {
         console.info("[yap-updater] calling quitAndInstall");
-        autoUpdater.quitAndInstall(false, true);
+        if (process.platform === "darwin") {
+          autoUpdater.quitAndInstall();
+        } else {
+          autoUpdater.quitAndInstall(false, true);
+        }
       } catch (error) {
         console.error("[yap-updater] quitAndInstall failed:", error);
-        reject(error);
+        rejectOnce(error);
         return;
       }
-      setTimeout(() => {
-        console.warn("[yap-updater] quitAndInstall did not exit promptly; falling back to app.quit");
-        app.quit();
-      }, 5000).unref();
-      resolve(null);
+      installTimer = setTimeout(() => {
+        rejectOnce(new Error("The update installer did not start. Restart Yap and try again."));
+      }, INSTALL_HANDOFF_TIMEOUT_MS);
+      installTimer.unref();
     };
     const onError = (error: Error) => {
-      cleanup();
       console.error("[yap-updater] update install failed:", error);
-      reject(error);
+      rejectOnce(error);
     };
 
     autoUpdater.on("download-progress", onProgress);
     autoUpdater.once("update-downloaded", onDownloaded);
     autoUpdater.once("error", onError);
-    autoUpdater.downloadUpdate().catch(onError);
+    app.once("before-quit", onBeforeQuit);
+    autoUpdater.downloadUpdate().catch((error: unknown) => {
+      onError(normalizeError(error));
+    });
   });
+}
+
+function updateContentLength(updateInfo: unknown): number | undefined {
+  const info = updateInfo as UpdateInfoWithFiles | undefined;
+  const files = info?.files ?? [];
+  const preferredFile =
+    files.find((file) => typeof file.url === "string" && file.url.endsWith(".zip")) ?? files[0];
+
+  return positiveNumber(preferredFile?.size);
+}
+
+function positiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function normalizeError(error: unknown): Error {
+  if (error instanceof Error) return error;
+  return new Error(String(error));
+}
+
+function assertCanUseInAppInstaller(): void {
+  if (process.platform !== "darwin") return;
+
+  const appBundlePath = macAppBundlePath();
+  if (!appBundlePath) return;
+
+  let signatureDetails: string;
+  try {
+    const result = spawnSync("codesign", ["-dv", "--verbose=4", appBundlePath], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    signatureDetails = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+    if (result.error) throw result.error;
+    if (result.status !== 0) throw new Error(signatureDetails);
+  } catch (error) {
+    throw new Error(
+      `This copy of Yap cannot use in-app updates because macOS could not verify its signature: ${normalizeError(error).message}`
+    );
+  }
+
+  if (!/^Authority=Developer ID Application:/m.test(signatureDetails)) {
+    throw new Error(
+      "This copy of Yap is not signed for in-app updates. Install the latest signed release manually once, then in-app updates will work."
+    );
+  }
+}
+
+function macAppBundlePath(): string | null {
+  const marker = "/Contents/MacOS/";
+  const executablePath = app.getPath("exe");
+  const markerIndex = executablePath.indexOf(marker);
+  return markerIndex === -1 ? null : executablePath.slice(0, markerIndex);
 }
