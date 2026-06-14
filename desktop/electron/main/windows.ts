@@ -11,6 +11,10 @@ app.on("before-quit", () => {
   isQuitting = true;
 });
 
+export function allowWindowCloseForQuit(): void {
+  isQuitting = true;
+}
+
 export function getWindow(label: WindowLabel): BrowserWindow | null {
   const window = windows.get(label);
   return window && !window.isDestroyed() ? window : null;

@@ -3,6 +3,8 @@ import { configureAppIdentity } from "./appIdentity";
 import { loadConfig } from "./config";
 import { installIpcHandlers } from "./ipc";
 import { appRoot } from "./paths";
+import { isAccessibilityPayload, PermissionSupervisor } from "./permissions";
+import { relaunchApp } from "./relaunch";
 import { YapCoreSidecar } from "./sidecar";
 import { installTray, refreshHistoryMenu } from "./tray";
 import { createMainWindow, hideAppIfNoWindowsVisible, sendToAllWindows, sendToWindow, showAppWindow } from "./windows";
@@ -15,12 +17,16 @@ const sidecar = new YapCoreSidecar({
   appRoot,
   onEvent: handleSidecarEvent,
 });
+const permissions = new PermissionSupervisor({
+  onAccessibilityGranted: () => relaunchApp(() => sidecar.stop()),
+});
 
 app.whenReady().then(async () => {
   configureAppIdentity();
   Menu.setApplicationMenu(null);
   installIpcHandlers(sidecar);
   await loadConfig();
+  await permissions.preflight();
   await installTray({
     setEnabled: async (enabled) => {
       await sidecar.invoke(enabled ? "runtime.start" : "runtime.stop", {});
@@ -42,6 +48,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  permissions.stop();
   void sidecar.stop();
 });
 
@@ -63,6 +70,10 @@ async function handleSidecarEvent({
     await showAppWindow("settings");
     sendToWindow("settings", event, payload);
     return;
+  }
+
+  if (event === "dictation:permission-required" && isAccessibilityPayload(payload)) {
+    permissions.ensureAccessibility("runtime");
   }
 
   if (target === "main" || target === "settings") {

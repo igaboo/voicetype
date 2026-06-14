@@ -1,6 +1,7 @@
 import { app, dialog, ipcMain, shell, type WebContents } from "electron";
 import { loadConfig } from "./config";
 import { cancelHotkeyCapture, startHotkeyCapture } from "./hotkeyCapture";
+import { relaunchApp } from "./relaunch";
 import type { YapCoreSidecar } from "./sidecar";
 import { refreshHistoryMenu } from "./tray";
 import {
@@ -34,13 +35,14 @@ async function dispatchInvoke(
   sender: WebContents
 ): Promise<unknown> {
   if (isElectronLocalCommand(command)) {
-    return dispatchElectronLocal(command, args, sender);
+    return dispatchElectronLocal(sidecar, command, args, sender);
   }
 
   return sidecar.invoke(command, args);
 }
 
 async function dispatchElectronLocal(
+  sidecar: YapCoreSidecar,
   command: string,
   args: InvokeArgs,
   sender: WebContents
@@ -88,8 +90,7 @@ async function dispatchElectronLocal(
     case "updater.download_and_install":
       return downloadAndInstallElectronUpdate(sender);
     case "app.relaunch":
-      app.relaunch();
-      app.exit(0);
+      await relaunchApp(() => sidecar.stop());
       return null;
     default:
       throw new Error(`Electron backend command is not implemented: ${command}`);
