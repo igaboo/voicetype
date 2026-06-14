@@ -225,10 +225,7 @@ pub fn load() -> Result<AppConfig, String> {
 
     let config = if path.exists() {
         let data = fs::read_to_string(&path).map_err(|e| format!("failed to read config: {e}"))?;
-        serde_json::from_str::<AppConfig>(&data).unwrap_or_else(|_| {
-            // File exists but is malformed -- fall back to defaults.
-            AppConfig::default()
-        })
+        parse_config_json(&data).unwrap_or_else(|_| AppConfig::default())
     } else {
         let config = AppConfig::default();
         // Write defaults so the file exists for the user to inspect.
@@ -270,10 +267,58 @@ pub fn update<F: FnOnce(&mut AppConfig)>(f: F) -> Result<AppConfig, String> {
 
 // ---- Internal -------------------------------------------------------------
 
+fn parse_config_json(data: &str) -> Result<AppConfig, serde_json::Error> {
+    let mut value = serde_json::from_str::<serde_json::Value>(data)?;
+    normalize_legacy_config_value(&mut value);
+    serde_json::from_value::<AppConfig>(value)
+}
+
+fn normalize_legacy_config_value(value: &mut serde_json::Value) {
+    let Some(object) = value.as_object_mut() else {
+        return;
+    };
+
+    if object.contains_key("backgroundAudioMode") {
+        return;
+    }
+
+    if let Some(quiet) = object
+        .get("quietAudioWhileRecording")
+        .and_then(serde_json::Value::as_bool)
+    {
+        object.insert(
+            "backgroundAudioMode".to_string(),
+            serde_json::Value::String(if quiet { "mute" } else { "off" }.to_string()),
+        );
+    }
+}
+
 fn save_to_disk(config: &AppConfig) -> Result<(), String> {
     let path = config_path()?;
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("failed to serialize config: {e}"))?;
     fs::write(&path, json).map_err(|e| format!("failed to write config: {e}"))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn legacy_quiet_audio_false_maps_to_background_audio_off() {
+        let config = parse_config_json(r#"{"quietAudioWhileRecording":false}"#).unwrap();
+
+        assert_eq!(config.background_audio_mode, BackgroundAudioMode::Off);
+    }
+
+    #[test]
+    fn explicit_background_audio_mode_wins_over_legacy_quiet_audio() {
+        let config = parse_config_json(
+            r#"{"quietAudioWhileRecording":false,"backgroundAudioMode":"pause"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.background_audio_mode, BackgroundAudioMode::Pause);
+    }
 }

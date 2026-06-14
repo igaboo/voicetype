@@ -35,6 +35,10 @@ export interface AppConfig {
   speechLocale: string;
 }
 
+type PersistedAppConfig = Partial<AppConfig> & {
+  quietAudioWhileRecording?: unknown;
+};
+
 let cachedConfig: AppConfig = defaultConfig();
 
 export function configDir(): string {
@@ -102,9 +106,11 @@ function defaultConfig(): AppConfig {
   };
 }
 
-function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfig {
+function normalizeConfig(input: PersistedAppConfig | null | undefined): AppConfig {
   const defaults = defaultConfig();
+  const persisted = input ?? {};
   const config = { ...defaults, ...(input ?? {}) };
+  const backgroundAudioMode = resolveBackgroundAudioMode(persisted, defaults.backgroundAudioMode);
 
   return {
     ...config,
@@ -120,9 +126,7 @@ function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfi
     oaiPrompt: stringOrDefault(config.oaiPrompt, ""),
     elLanguageCode: stringOrDefault(config.elLanguageCode, ""),
     speechLocale: stringOrDefault(config.speechLocale, ""),
-    backgroundAudioMode: isBackgroundAudioMode(config.backgroundAudioMode)
-      ? config.backgroundAudioMode
-      : defaults.backgroundAudioMode,
+    backgroundAudioMode,
   };
 }
 
@@ -132,4 +136,19 @@ function stringOrDefault(value: unknown, fallback: string): string {
 
 function isBackgroundAudioMode(value: unknown): value is BackgroundAudioMode {
   return value === "off" || value === "mute" || value === "pause";
+}
+
+function resolveBackgroundAudioMode(
+  input: PersistedAppConfig,
+  fallback: BackgroundAudioMode
+): BackgroundAudioMode {
+  if (isBackgroundAudioMode(input.backgroundAudioMode)) {
+    return input.backgroundAudioMode;
+  }
+
+  if (typeof input.quietAudioWhileRecording === "boolean") {
+    return input.quietAudioWhileRecording ? "mute" : "off";
+  }
+
+  return fallback;
 }
