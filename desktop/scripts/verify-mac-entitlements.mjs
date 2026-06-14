@@ -1,8 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 const outputDir = resolve("release-electron");
+const requireTrustedSigning =
+  process.env.YAP_REQUIRE_MAC_SIGNING === "1" || process.env.GITHUB_REF?.startsWith("refs/tags/v");
 const requiredEntitlements = [
   "com.apple.security.device.audio-input",
   "com.apple.security.personal-information.speech-recognition",
@@ -54,7 +56,59 @@ execFileSync("codesign", ["--verify", "--deep", "--strict", "--verbose=2", appPa
   stdio: "inherit",
 });
 
+if (requireTrustedSigning) {
+  verifyTrustedMacSignature(appPath);
+}
+
 console.log(`macOS entitlements verified for ${appPath}.`);
+
+function verifyTrustedMacSignature(appPath) {
+  const signatureDetails = capture("codesign", ["-dv", "--verbose=4", appPath]);
+
+  if (/^Signature=adhoc$/m.test(signatureDetails)) {
+    fail("Yap.app is ad-hoc signed. Release builds need a Developer ID Application certificate.");
+  }
+
+  if (!/^Authority=Developer ID Application:/m.test(signatureDetails)) {
+    fail("Yap.app is not signed with a Developer ID Application identity.");
+  }
+
+  const teamIdentifier = signatureDetails.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim();
+  if (!teamIdentifier || teamIdentifier === "not set") {
+    fail("Yap.app has no TeamIdentifier. Release builds need a trusted Apple signing identity.");
+  }
+
+  try {
+    execFileSync("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath], {
+      stdio: "inherit",
+    });
+  } catch {
+    fail("Gatekeeper rejected Yap.app. Release builds need successful notarization/stapling.");
+  }
+}
+
+function capture(command, args) {
+  const result = spawnSync(command, args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+  if (result.error) {
+    fail(`${command} failed: ${result.error.message}`);
+  }
+
+  if (result.status !== 0) {
+    fail(`${command} ${args.join(" ")} failed:\n${output}`);
+  }
+
+  return output;
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
 
 function findNewestAppBundle(root) {
   const bundles = findAppBundles(root);
