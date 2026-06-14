@@ -1,7 +1,6 @@
 import { app, dialog, ipcMain, shell, type WebContents } from "electron";
 import { loadConfig } from "./config";
 import { cancelHotkeyCapture, startHotkeyCapture } from "./hotkeyCapture";
-import { relaunchApp } from "./relaunch";
 import type { YapCoreSidecar } from "./sidecar";
 import { refreshHistoryMenu } from "./tray";
 import {
@@ -89,9 +88,6 @@ async function dispatchElectronLocal(
       return checkForElectronUpdate();
     case "updater.download_and_install":
       return downloadAndInstallElectronUpdate(sender);
-    case "app.relaunch":
-      await relaunchApp(() => sidecar.stop());
-      return null;
     default:
       throw new Error(`Electron backend command is not implemented: ${command}`);
   }
@@ -113,8 +109,7 @@ function isElectronLocalCommand(command: string): boolean {
     command === "autostart.enable" ||
     command === "autostart.disable" ||
     command === "updater.check" ||
-    command === "updater.download_and_install" ||
-    command === "app.relaunch"
+    command === "updater.download_and_install"
   );
 }
 

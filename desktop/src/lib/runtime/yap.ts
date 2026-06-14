@@ -32,7 +32,6 @@ interface YapBridge {
   versions?: Record<string, string>;
   app?: {
     getInfo?: () => Promise<YapAppInfo>;
-    relaunch?: () => Promise<void>;
   };
   windows?: {
     openSettings?: () => Promise<void>;
@@ -189,13 +188,6 @@ export async function checkForRuntimeUpdate(options?: { timeout?: number }): Pro
   }
 
   return null;
-}
-
-export async function relaunchRuntime(): Promise<void> {
-  const electron = requiredElectronBridge();
-  if (electron?.app?.relaunch) {
-    await electron.app.relaunch();
-  }
 }
 
 export async function onRuntimeFocusChanged(handler: (focused: boolean) => void): Promise<Unlisten> {
