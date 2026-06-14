@@ -59,6 +59,7 @@
   const defaultTxProvider = isWindows ? 'openai' : 'none';
   const buildLabel = `v${__APP_VERSION__} (${__GIT_COMMIT_SHORT__})`;
   const buildUrl = __GITHUB_COMMIT_URL__;
+  const releasesUrl = 'https://github.com/oobagi/yap/releases/latest';
 
   const txProviders = transcriptionProviders(isWindows);
 
@@ -146,7 +147,7 @@
 
   // Updates
   let updateStatus = $state<UpdateStatus>('idle');
-  let updateMessage = $state('Check for a signed Yap release from GitHub.');
+  let updateMessage = $state('Check for updates from GitHub Releases.');
   let updateVersion = $state('');
   let updateDownloaded = $state(0);
   let updateTotal = $state<number | null>(null);
@@ -711,6 +712,10 @@
     return `${formatBytes(updateDownloaded)} of ${formatBytes(updateTotal)}`;
   }
 
+  function canInstallPendingUpdateInApp(): boolean {
+    return pendingUpdate?.canInstallInApp ?? true;
+  }
+
   function clampPercent(value: number): number {
     return Math.max(0, Math.min(100, Math.round(value)));
   }
@@ -733,7 +738,7 @@
   function updaterErrorMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('latest-mac.yml') || message.includes('latest.yml') || message.includes('update metadata')) {
-      return 'No signed update metadata is available yet. Try again after the next release finishes.';
+      return 'No in-app update metadata is available. Download the latest release from GitHub Releases.';
     }
     if (message.includes('signature')) {
       return 'The update could not be verified, so Yap did not install it.';
@@ -764,7 +769,9 @@
       pendingUpdate = update;
       updateVersion = update.version;
       updateStatus = 'available';
-      updateMessage = `Yap ${update.version} is ready to install.`;
+      updateMessage = update.canInstallInApp
+        ? `Yap ${update.version} is ready to install.`
+        : `Yap ${update.version} is available from GitHub Releases.`;
     } catch (error) {
       pendingUpdate = null;
       updateStatus = 'error';
@@ -775,6 +782,10 @@
 
   async function installUpdate() {
     if (!pendingUpdate || updateBusy()) return;
+    if (!pendingUpdate.canInstallInApp) {
+      await openUpdateRelease();
+      return;
+    }
 
     const version = pendingUpdate.version;
     const confirmed = await confirmAction(
@@ -814,6 +825,18 @@
       updateStatus = 'error';
       updateMessage = updaterErrorMessage(error);
       console.error('Failed to install update:', error);
+    }
+  }
+
+  async function openUpdateRelease() {
+    if (!pendingUpdate) return;
+
+    try {
+      await openExternal(pendingUpdate.releaseUrl ?? releasesUrl);
+    } catch (error) {
+      updateStatus = 'error';
+      updateMessage = 'Could not open GitHub Releases.';
+      console.error('Failed to open update release:', error);
     }
   }
 
@@ -1562,7 +1585,7 @@
                 </div>
                 {#if updateStatus === 'available'}
                   <button class="btn btn-primary" onclick={installUpdate} type="button">
-                    Install Update
+                    {canInstallPendingUpdateInApp() ? 'Install Update' : 'Open Release'}
                   </button>
                 {:else}
                   <button class="btn btn-secondary" onclick={checkForUpdates} type="button" disabled={updateBusy()}>
@@ -1585,7 +1608,11 @@
 
               {#if updateStatus === 'available' && updateVersion}
                 <div class="section-footer">
-                  Version {updateVersion} will be verified before it is installed.
+                  {#if canInstallPendingUpdateInApp()}
+                    Version {updateVersion} will be verified before it is installed.
+                  {:else}
+                    Install the downloaded app manually to update this unsigned macOS build.
+                  {/if}
                 </div>
               {:else if updateStatus === 'error'}
                 <div class="section-footer update-error">

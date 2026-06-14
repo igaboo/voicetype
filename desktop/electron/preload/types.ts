@@ -27,6 +27,8 @@ export interface YapDownloadEvent {
 
 export interface YapUpdate {
   version: string;
+  canInstallInApp: boolean;
+  releaseUrl?: string;
   downloadAndInstall(onEvent?: (event: YapDownloadEvent) => void): Promise<void>;
 }
 
