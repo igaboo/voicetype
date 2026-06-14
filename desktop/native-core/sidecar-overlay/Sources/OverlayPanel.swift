@@ -256,9 +256,12 @@ class OverlayPanel: NSPanel {
         updatePillTarget()
     }
 
-    func applyLevels(level: Float, bars: [Float]) {
+    func applyLevels(level: Float, bars: [Float], elapsed: Double) {
         overlayState.audioLevel = level
         overlayState.bandLevels = bars
+        if overlayState.mode == .recording {
+            overlayState.handsFreeElapsed = elapsed
+        }
         updateButtonTargets()
     }
 
@@ -620,7 +623,7 @@ struct OverlayView: View {
                             .transition(.opacity.combined(with: .scale(scale: 0.95, anchor: .bottom)))
                     }
 
-                    if state.mode == .recording && state.handsFreeElapsed >= 10 {
+                    if state.mode == .recording && state.isHandsFree {
                         Text(formatElapsed(state.handsFreeElapsed))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundColor(.white.opacity(0.5))
@@ -687,7 +690,7 @@ struct OverlayView: View {
                 .offset(y: stackYOffset)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.onboardingStep)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: state.mode)
-                .animation(.spring(response: 0.45, dampingFraction: 0.7), value: state.mode == .recording && state.handsFreeElapsed >= 10)
+                .animation(.spring(response: 0.45, dampingFraction: 0.7), value: state.mode == .recording && state.isHandsFree)
                 .animation(.spring(response: 0.4, dampingFraction: 0.8), value: stackYOffset)
 
                 Spacer().frame(height: OverlayLayout.bottomSpacerHeight)

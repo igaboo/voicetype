@@ -42,7 +42,8 @@ DispatchQueue.global(qos: .userInteractive).async {
             case "levels":
                 panel.applyLevels(
                     level: msg.level ?? 0,
-                    bars: msg.bars ?? Array(repeating: 0, count: 11)
+                    bars: msg.bars ?? Array(repeating: 0, count: 11),
+                    elapsed: msg.elapsed ?? 0
                 )
 
             case "error":
