@@ -13,12 +13,19 @@ export async function checkForElectronUpdate(): Promise<{ version: string } | nu
   if (!app.isPackaged) return null;
 
   const result = await autoUpdater.checkForUpdates();
+  if (!result?.isUpdateAvailable) return null;
+
   const version = result?.updateInfo?.version;
   return version ? { version } : null;
 }
 
 export async function downloadAndInstallElectronUpdate(sender: WebContents): Promise<null> {
   if (!app.isPackaged) return null;
+
+  const result = await autoUpdater.checkForUpdates();
+  if (!result?.isUpdateAvailable) {
+    throw new Error("No update is available to install. Check for updates again.");
+  }
 
   let transferred = 0;
   console.info("[yap-updater] starting update download");
