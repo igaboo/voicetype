@@ -7,7 +7,14 @@ import { isAccessibilityPayload, PermissionSupervisor } from "./permissions";
 import { relaunchApp } from "./relaunch";
 import { YapCoreSidecar } from "./sidecar";
 import { installTray, refreshHistoryMenu } from "./tray";
-import { createMainWindow, hideAppIfNoWindowsVisible, sendToAllWindows, sendToWindow, showAppWindow } from "./windows";
+import {
+  activateAppWindow,
+  createMainWindow,
+  hideAppIfNoWindowsVisible,
+  sendToAllWindows,
+  sendToWindow,
+  showAppWindow,
+} from "./windows";
 
 if (process.platform === "darwin") {
   app.commandLine.appendSwitch("use-mock-keychain");
@@ -40,7 +47,7 @@ app.whenReady().then(async () => {
 });
 
 app.on("activate", () => {
-  void showAppWindow("main");
+  void activateAppWindow();
 });
 
 app.on("window-all-closed", () => {

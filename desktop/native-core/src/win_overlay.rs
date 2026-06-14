@@ -1359,7 +1359,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     }
 
     // -- Elapsed time (above pill, hands-free) --
-    if state.mode == "recording" && state.elapsed >= 10.0 {
+    if state.mode == "recording" && state.hands_free {
         if let Some(ref fr) = font {
             let elapsed_text = format_elapsed(state.elapsed);
             fr.render_centered(

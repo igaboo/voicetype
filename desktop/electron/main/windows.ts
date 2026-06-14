@@ -29,13 +29,27 @@ export function windowLabelFor(webContentsId: number): WindowLabel {
 
 export async function showAppWindow(label: WindowLabel): Promise<BrowserWindow> {
   const window = label === "settings" ? await createSettingsWindow() : await createMainWindow();
+  presentWindow(window);
+  return window;
+}
+
+export async function activateAppWindow(): Promise<BrowserWindow> {
+  const settingsWindow = getWindow("settings");
+  if (settingsWindow?.isVisible() || settingsWindow?.isMinimized()) {
+    presentWindow(settingsWindow);
+    return settingsWindow;
+  }
+
+  return showAppWindow("settings");
+}
+
+function presentWindow(window: BrowserWindow): void {
   if (process.platform === "darwin") {
     app.dock?.show();
   }
   if (window.isMinimized()) window.restore();
   window.show();
   window.focus();
-  return window;
 }
 
 export function hideAppWindow(label: WindowLabel): void {

@@ -871,6 +871,7 @@ fn start_level_poller() {
             }
 
             let levels = audio::get_levels();
+            let elapsed = recording_elapsed_seconds();
             update_peak_level(levels.level);
             emit(
                 "dictation:levels",
@@ -879,7 +880,7 @@ fn start_level_poller() {
                     "bars": levels.bars,
                 }),
             );
-            emit_overlay_levels(levels.level, levels.bars.to_vec());
+            emit_overlay_levels(levels.level, levels.bars.to_vec(), elapsed);
         })
         .ok();
 }
@@ -963,14 +964,14 @@ fn spawn_overlay(_cfg: &AppConfig) {}
 #[cfg(target_os = "macos")]
 fn stop_overlay() {
     emit_overlay_state("idle".to_string(), false, false);
-    emit_overlay_levels(0.0, vec![0.0; 11]);
+    emit_overlay_levels(0.0, vec![0.0; 11], 0.0);
     crate::sidecar::stop();
 }
 
 #[cfg(target_os = "windows")]
 fn stop_overlay() {
     emit_overlay_state("idle".to_string(), false, false);
-    emit_overlay_levels(0.0, vec![0.0; 11]);
+    emit_overlay_levels(0.0, vec![0.0; 11], 0.0);
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -1058,14 +1059,19 @@ fn emit_overlay_state(state: String, hands_free: bool, paused: bool) {
 fn emit_overlay_state(_state: String, _hands_free: bool, _paused: bool) {}
 
 #[cfg(target_os = "macos")]
-fn emit_overlay_levels(level: f32, bars: Vec<f32>) {
-    crate::sidecar::send(&crate::sidecar::OutMessage::Levels { level, bars });
+fn emit_overlay_levels(level: f32, bars: Vec<f32>, elapsed: f64) {
+    crate::sidecar::send(&crate::sidecar::OutMessage::Levels {
+        level,
+        bars,
+        elapsed,
+    });
 }
 
 #[cfg(target_os = "windows")]
-fn emit_overlay_levels(level: f32, bars: Vec<f32>) {
+fn emit_overlay_levels(level: f32, bars: Vec<f32>, elapsed: f64) {
     crate::win_overlay::update_state(|overlay| {
         overlay.level = level;
+        overlay.elapsed = elapsed;
         if bars.len() == 11 {
             overlay.bars.copy_from_slice(&bars);
         }
@@ -1073,7 +1079,7 @@ fn emit_overlay_levels(level: f32, bars: Vec<f32>) {
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-fn emit_overlay_levels(_level: f32, _bars: Vec<f32>) {}
+fn emit_overlay_levels(_level: f32, _bars: Vec<f32>, _elapsed: f64) {}
 
 #[cfg(target_os = "macos")]
 fn emit_overlay_error(message: &str) {

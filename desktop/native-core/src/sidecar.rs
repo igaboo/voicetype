@@ -38,6 +38,7 @@ pub enum OutMessage {
     Levels {
         level: f32,
         bars: Vec<f32>,
+        elapsed: f64,
     },
     Error {
         message: String,
