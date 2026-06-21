@@ -91,6 +91,13 @@ pub fn start_recording(device_name: Option<&str>) -> Result<PathBuf, String> {
         stream_config.buffer_size
     ));
 
+    if RECORDING
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("recording already in progress".into());
+    }
+
     let wav_path = std::env::temp_dir().join("yap_recording.wav");
 
     let spec = WavSpec {
@@ -100,8 +107,13 @@ pub fn start_recording(device_name: Option<&str>) -> Result<PathBuf, String> {
         sample_format: SampleFormat::Int,
     };
 
-    let writer = WavWriter::create(&wav_path, spec)
-        .map_err(|e| format!("failed to create WAV file: {e}"))?;
+    let writer = match WavWriter::create(&wav_path, spec) {
+        Ok(writer) => writer,
+        Err(e) => {
+            RECORDING.store(false, Ordering::SeqCst);
+            return Err(format!("failed to create WAV file: {e}"));
+        }
+    };
 
     // Store the writer and path
     if let Ok(mut w) = WAV_WRITER.lock() {
@@ -120,7 +132,6 @@ pub fn start_recording(device_name: Option<&str>) -> Result<PathBuf, String> {
     }
     STOP_FLAG.store(false, Ordering::SeqCst);
     PAUSED.store(false, Ordering::SeqCst);
-    RECORDING.store(true, Ordering::SeqCst);
 
     let writer_ref = WAV_WRITER.clone();
     let levels_ref = CURRENT_LEVELS.clone();
@@ -129,7 +140,7 @@ pub fn start_recording(device_name: Option<&str>) -> Result<PathBuf, String> {
 
     // Build the stream on a dedicated thread (cpal::Stream is !Send,
     // so it must live on the thread that created it).
-    let thread = std::thread::Builder::new()
+    let thread = match std::thread::Builder::new()
         .name("yap-audio".into())
         .spawn(move || {
             let err_fn = |err: cpal::StreamError| {
@@ -248,8 +259,13 @@ pub fn start_recording(device_name: Option<&str>) -> Result<PathBuf, String> {
             drop(stream);
 
             RECORDING.store(false, Ordering::SeqCst);
-        })
-        .map_err(|e| format!("failed to spawn audio thread: {e}"))?;
+        }) {
+        Ok(thread) => thread,
+        Err(e) => {
+            cleanup_failed_start();
+            return Err(format!("failed to spawn audio thread: {e}"));
+        }
+    };
 
     match ready_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(Ok(())) => {}
@@ -392,12 +408,13 @@ fn process_audio_callback(
         })
         .collect();
 
-    // Write to WAV if not paused
-    if !PAUSED.load(Ordering::Relaxed) && !STOP_FLAG.load(Ordering::Relaxed) {
+    // Write the whole callback that was already delivered before stop was
+    // observed, so key release does not truncate the tail mid-buffer.
+    if !PAUSED.load(Ordering::Relaxed) {
         if let Ok(mut guard) = writer.lock() {
             if let Some(ref mut w) = *guard {
                 for &sample in &mono_samples {
-                    if PAUSED.load(Ordering::Relaxed) || STOP_FLAG.load(Ordering::Relaxed) {
+                    if PAUSED.load(Ordering::Relaxed) {
                         break;
                     }
                     let s16 =
@@ -462,6 +479,8 @@ pub fn stop_recording() -> Result<PathBuf, String> {
         return Err("no active recording session".into());
     }
 
+    log_audio("stop requested");
+
     // Signal the recording thread to stop
     STOP_FLAG.store(true, Ordering::SeqCst);
 
@@ -472,14 +491,20 @@ pub fn stop_recording() -> Result<PathBuf, String> {
         }
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
+    if RECORDING.load(Ordering::SeqCst) {
+        log_audio("audio thread did not acknowledge stop before WAV finalization");
+    }
 
     // Finalize the WAV writer
+    log_audio("finalizing WAV writer");
     if let Ok(mut guard) = WAV_WRITER.lock() {
         if let Some(writer) = guard.take() {
             writer
                 .finalize()
                 .map_err(|e| format!("failed to finalize WAV: {e}"))?;
         }
+    } else {
+        return Err("failed to lock WAV writer for finalization".to_string());
     }
 
     let path = WAV_PATH
@@ -488,7 +513,37 @@ pub fn stop_recording() -> Result<PathBuf, String> {
         .and_then(|p| p.clone())
         .ok_or_else(|| "no WAV path available".to_string())?;
 
+    log_finalized_wav(&path);
+
     Ok(path)
+}
+
+fn log_finalized_wav(path: &PathBuf) {
+    let size = std::fs::metadata(path)
+        .map(|metadata| metadata.len())
+        .unwrap_or(0);
+    match hound::WavReader::open(path) {
+        Ok(reader) => {
+            let spec = reader.spec();
+            if spec.sample_rate > 0 && spec.channels > 0 {
+                let frames = reader.duration() as f64 / spec.channels as f64;
+                let duration = frames / spec.sample_rate as f64;
+                log_audio(&format!(
+                    "finalized WAV path={path:?} size={size} duration={duration:.3}s sample_rate={} channels={} bits={}",
+                    spec.sample_rate, spec.channels, spec.bits_per_sample
+                ));
+            } else {
+                log_audio(&format!(
+                    "finalized WAV path={path:?} size={size} invalid sample metadata"
+                ));
+            }
+        }
+        Err(error) => {
+            log_audio(&format!(
+                "finalized WAV path={path:?} size={size} metadata_error={error}"
+            ));
+        }
+    }
 }
 
 /// Pause audio capture (hands-free mode). Engine keeps running for levels.

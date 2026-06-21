@@ -46,7 +46,7 @@ interface ProviderOption {
 
 export function transcriptionProviders(isWindows: boolean): ProviderOption[] {
   return [
-    { value: 'none', label: isWindows ? 'On-device (macOS only)' : 'On-device', disabled: isWindows },
+    { value: 'none', label: isWindows ? 'On-device (macOS 26+)' : 'On-device (macOS 26+)', disabled: isWindows },
     { value: 'gemini', label: 'Gemini' },
     { value: 'openai', label: 'OpenAI' },
     { value: 'deepgram', label: 'Deepgram' },
@@ -113,7 +113,7 @@ export const styleExampleInput = 'yeah i was thinking we could try that new plac
 export const modifierOrder = ['cmd', 'ctrl', 'option', 'shift', 'fn'];
 
 export const providerLabels: Record<string, string> = {
-  none: 'On-device',
+  none: 'On-device (macOS 26+)',
   gemini: 'Gemini',
   openai: 'OpenAI',
   deepgram: 'Deepgram',

@@ -21,9 +21,8 @@ fn main() {
         }
     }
 
-    // Link the Speech framework on macOS for SFSpeechRecognizer
+    // Link macOS frameworks used by native OS integration.
     if target_os == "macos" {
-        println!("cargo:rustc-link-lib=framework=Speech");
         println!("cargo:rustc-link-lib=framework=ApplicationServices");
     }
 }
