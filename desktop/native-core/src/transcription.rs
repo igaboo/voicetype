@@ -10,7 +10,7 @@ use crate::formatting::FormattingStyle;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum TranscriptionProvider {
-    /// On-device speech recognition. Currently available on macOS.
+    /// On-device SpeechAnalyzer recognition. Currently available on macOS 26+.
     None,
     Gemini,
     #[serde(rename = "openai")]
@@ -122,7 +122,7 @@ fn resolve_model(model: &str, provider: TranscriptionProvider) -> String {
 
 async fn transcribe_on_device(audio_path: &Path) -> Result<String, String> {
     // Delegate to the platform-native speech recognition module.
-    // On macOS this uses SFSpeechRecognizer; on other platforms it returns an error.
+    // On macOS this uses Apple's SpeechAnalyzer helper; on other platforms it returns an error.
     let path = audio_path.to_path_buf();
     let locale = crate::config::get().speech_recognition_locale();
     // Run on a blocking thread since the native API uses synchronous channel waiting.

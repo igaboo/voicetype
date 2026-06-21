@@ -160,15 +160,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "block2"
-version = "0.6.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdeb9d870516001442e364c5220d3574d2da8dc765554b4a617230d33fa58ef5"
-dependencies = [
- "objc2 0.6.4",
-]
-
-[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -927,7 +918,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fb69199826926eb864697bddd27f73d9fddcffc004f5733131e15b465e30642"
 dependencies = [
- "block2 0.4.0",
+ "block2",
  "objc2 0.5.2",
 ]
 
@@ -3352,7 +3343,6 @@ version = "3.0.9"
 dependencies = [
  "arboard",
  "base64",
- "block2 0.6.2",
  "chrono",
  "core-graphics 0.24.0",
  "cpal",
@@ -3361,7 +3351,6 @@ dependencies = [
  "enigo",
  "fontdue",
  "hound",
- "objc2 0.6.4",
  "once_cell",
  "reqwest",
  "rodio",

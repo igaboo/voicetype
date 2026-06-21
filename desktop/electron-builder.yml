@@ -28,11 +28,13 @@ extraResources:
 mac:
   category: public.app-category.productivity
   icon: native-core/icons/icon.icns
+  minimumSystemVersion: "26.0"
   entitlements: electron/entitlements.mac.plist
   entitlementsInherit: electron/entitlements.mac.inherit.plist
   extendInfo:
+    LSMinimumSystemVersion: "26.0"
     NSMicrophoneUsageDescription: Yap records your voice so it can transcribe and paste what you say.
-    NSSpeechRecognitionUsageDescription: Yap uses speech recognition to transcribe audio locally when available.
+    NSSpeechRecognitionUsageDescription: Yap uses Apple SpeechAnalyzer to transcribe audio locally on macOS 26 or newer.
   target:
     - dmg
     - zip

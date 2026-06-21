@@ -21,7 +21,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/macOS-13%2B-blue" alt="macOS 13+">
+  <img src="https://img.shields.io/badge/macOS-26%2B-blue" alt="macOS 26+">
   <img src="https://img.shields.io/badge/Windows-10%2B-blue" alt="Windows 10+">
   <img src="https://img.shields.io/badge/Electron-42-47848f" alt="Electron 42">
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT">
@@ -39,7 +39,7 @@ https://github.com/oobagi/yap/releases/latest
 
 - Global push-to-talk dictation that pastes into the active app.
 - Hands-free recording from the hotkey or floating pill.
-- Local macOS transcription or cloud transcription with Gemini, OpenAI, Deepgram, and ElevenLabs.
+- Local macOS 26+ SpeechAnalyzer transcription or cloud transcription with Gemini, OpenAI, Deepgram, and ElevenLabs.
 - Optional cleanup styles for casual, formatted, or professional text.
 - Local transcript history and in-app update checks.
 
@@ -47,7 +47,7 @@ https://github.com/oobagi/yap/releases/latest
 
 Open the tray/menu bar icon, choose **Settings**, then pick a transcription provider. Windows does not have the macOS on-device option, so choose one of the API providers below.
 
-- On-device transcription (macOS only, no API key)
+- On-device transcription (macOS 26+ only, no API key)
 - [Gemini](https://ai.google.dev/gemini-api/docs/api-key)
 - [OpenAI](https://platform.openai.com/api-keys)
 - [Deepgram](https://developers.deepgram.com/docs/create-additional-api-keys)

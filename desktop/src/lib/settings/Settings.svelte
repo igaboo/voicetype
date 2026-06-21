@@ -1212,7 +1212,7 @@
                   <span class="field-description">
                     {isWindows
                       ? 'Choose an API provider to enable transcription.'
-                      : 'Uses macOS on-device speech recognition. Choose an API provider for more accurate transcription.'}
+                      : 'Uses Apple SpeechAnalyzer for on-device transcription on macOS 26 or newer. Choose an API provider for cloud transcription.'}
                   </span>
                 {/if}
               </div>
