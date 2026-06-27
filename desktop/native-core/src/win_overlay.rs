@@ -28,6 +28,8 @@ use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
+use crate::config::AppearanceMode;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -197,6 +199,7 @@ pub struct OverlayState {
     // Config
     pub gradient_enabled: bool,
     pub always_visible: bool,
+    pub appearance_mode: AppearanceMode,
 
     // Pressed state (onboarding key press visual)
     pub is_pressed: bool,
@@ -217,7 +220,77 @@ impl Default for OverlayState {
             hotkey_label: "fn".into(),
             gradient_enabled: true,
             always_visible: true,
+            appearance_mode: AppearanceMode::System,
             is_pressed: false,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct OverlayPalette {
+    is_dark: bool,
+}
+
+impl OverlayPalette {
+    fn from_state(state: &OverlayState) -> Self {
+        Self {
+            is_dark: !matches!(state.appearance_mode, AppearanceMode::Light),
+        }
+    }
+
+    fn text(self, alpha: u8) -> [u8; 4] {
+        if self.is_dark {
+            [255, 255, 255, alpha]
+        } else {
+            [31, 26, 22, alpha]
+        }
+    }
+
+    fn pill_fill(self, expanded: bool) -> [u8; 4] {
+        if self.is_dark {
+            [15, 15, 26, if expanded { 191 } else { 102 }]
+        } else {
+            [255, 251, 245, if expanded { 209 } else { 148 }]
+        }
+    }
+
+    fn border(self, expanded: bool) -> [u8; 4] {
+        if self.is_dark {
+            [255, 255, 255, if expanded { 77 } else { 89 }]
+        } else {
+            [0, 0, 0, if expanded { 36 } else { 46 }]
+        }
+    }
+
+    fn bar(self, alpha: u8) -> [u8; 4] {
+        if self.is_dark {
+            [255, 255, 255, alpha]
+        } else {
+            [41, 36, 31, alpha]
+        }
+    }
+
+    fn control_fill(self, alpha: u8) -> [u8; 4] {
+        if self.is_dark {
+            [255, 255, 255, alpha]
+        } else {
+            [0, 0, 0, alpha]
+        }
+    }
+
+    fn key_fill(self) -> [u8; 4] {
+        if self.is_dark {
+            [64, 64, 64, 255]
+        } else {
+            [235, 229, 219, 255]
+        }
+    }
+
+    fn key_border(self) -> [u8; 4] {
+        if self.is_dark {
+            [115, 115, 115, 255]
+        } else {
+            [0, 0, 0, 46]
         }
     }
 }
@@ -1337,6 +1410,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     let geom = overlay_geometry(&state, Some(anim));
     let cx = geom.cx;
     let pill_cy = geom.pill_cy;
+    let palette = OverlayPalette::from_state(&state);
 
     // -- Lava lamp gradient --
     if anim.gradient_opacity.val() > 0.01 {
@@ -1355,6 +1429,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                     &state.hotkey_label,
                     cx,
                     pill_cy - CARD_GAP_Y,
+                    &palette,
                 );
             }
         }
@@ -1364,7 +1439,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     if state.mode == "error" {
         if let Some(ref msg) = state.error {
             if let Some(ref fr) = font {
-                render_error_card(&mut pixmap, fr, msg, cx, pill_cy - CARD_GAP_Y);
+                render_error_card(&mut pixmap, fr, msg, cx, pill_cy - CARD_GAP_Y, &palette);
             }
         }
     }
@@ -1381,7 +1456,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                 cx,
                 pill_cy - TIMER_GAP_Y + (1.0 - timer_opacity) * 12.0,
                 11.0,
-                [255, 255, 255, alpha],
+                palette.text(alpha),
             );
         }
     }
@@ -1398,8 +1473,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     // Pill capsule background
     let capsule = rounded_rect(pill_x, pill_y, pill_w, pill_h, pill_r);
     let mut bg_paint = tiny_skia::Paint::default();
-    let bg_alpha = if is_expanded { 0.75 } else { 0.4 };
-    bg_paint.set_color(tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, bg_alpha).unwrap());
+    bg_paint.set_color(color_from_rgba8(palette.pill_fill(is_expanded)));
     bg_paint.anti_alias = true;
     pixmap.fill_path(
         &capsule,
@@ -1410,9 +1484,8 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
     );
 
     // Pill border
-    let border_alpha = if is_expanded { 0.3 } else { 0.35 };
     let mut border_paint = tiny_skia::Paint::default();
-    border_paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, border_alpha).unwrap());
+    border_paint.set_color(color_from_rgba8(palette.border(is_expanded)));
     border_paint.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: if is_expanded { 1.0 } else { 1.5 },
@@ -1441,7 +1514,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                 let start_x = pill_content_cx - total_w / 2.0;
 
                 let text_y = pill_cy + 4.0 * pill_scale;
-                let color = [255, 255, 255, 200];
+                let color = palette.text(200);
                 let mut x = start_x;
                 x += fr.render(&mut pixmap, "Hold ", x, text_y, font_size, color);
                 // Draw keycap
@@ -1452,13 +1525,14 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                     x,
                     pill_cy,
                     font_size,
+                    &palette,
                 );
                 x += key_w + gap;
                 fr.render(&mut pixmap, suffix, x, text_y, font_size, color);
             }
         } else if state.mode == "idle" || state.mode == "noSpeech" {
             // Flat bars for onboarding idle
-            render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale);
+            render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale, &palette);
         }
     }
 
@@ -1474,22 +1548,37 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                     pill_cy,
                     pill_scale,
                     controls_progress,
+                    &palette,
                 );
             } else {
-                render_bars(&mut pixmap, anim, pill_content_cx, pill_cy, pill_scale);
+                render_bars(
+                    &mut pixmap,
+                    anim,
+                    pill_content_cx,
+                    pill_cy,
+                    pill_scale,
+                    &palette,
+                );
             }
         }
         "pending" => {
-            render_bars(&mut pixmap, anim, pill_content_cx, pill_cy, pill_scale);
+            render_bars(
+                &mut pixmap,
+                anim,
+                pill_content_cx,
+                pill_cy,
+                pill_scale,
+                &palette,
+            );
         }
         "error" => {
-            render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale);
+            render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale, &palette);
         }
         "noSpeech" => {
             if state.onboarding_step.is_none()
                 || !state.onboarding_step.as_ref().unwrap().shows_hold_prompt()
             {
-                render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale);
+                render_flat_bars(&mut pixmap, pill_content_cx, pill_cy, pill_scale, &palette);
             }
         }
         "idle" => {}
@@ -1510,7 +1599,7 @@ fn render_frame(hwnd: HWND, anim: &mut AnimState, font: &Option<FontRenderer>) {
                 cx,
                 tooltip_y,
                 13.0,
-                [255, 255, 255, alpha],
+                palette.text(alpha),
             );
         }
     }
@@ -1678,7 +1767,24 @@ fn gradient_dither(x: u32, y: u32) -> f32 {
     ((n ^ (n >> 16)) & 0xff) as f32 / 255.0
 }
 
-fn render_bars(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy: f32, scale: f32) {
+fn color_from_rgba8(color: [u8; 4]) -> tiny_skia::Color {
+    tiny_skia::Color::from_rgba(
+        color[0] as f32 / 255.0,
+        color[1] as f32 / 255.0,
+        color[2] as f32 / 255.0,
+        color[3] as f32 / 255.0,
+    )
+    .unwrap()
+}
+
+fn render_bars(
+    pixmap: &mut tiny_skia::Pixmap,
+    anim: &AnimState,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    palette: &OverlayPalette,
+) {
     let bar_w = BAR_W * scale;
     let bar_gap = BAR_GAP * scale;
     let bars_total_w = BARS_TOTAL_W * scale;
@@ -1692,7 +1798,8 @@ fn render_bars(pixmap: &mut tiny_skia::Pixmap, anim: &AnimState, cx: f32, cy: f3
 
         let bar_path = rounded_rect(x, y, bar_w, bar_h, 1.5 * scale);
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, opacity).unwrap());
+        let alpha = (opacity * 255.0).round().clamp(0.0, 255.0) as u8;
+        paint.set_color(color_from_rgba8(palette.bar(alpha)));
         paint.anti_alias = true;
         pixmap.fill_path(
             &bar_path,
@@ -1712,12 +1819,13 @@ fn render_hands_free_content(
     cy: f32,
     scale: f32,
     controls_progress: f32,
+    palette: &OverlayPalette,
 ) {
     // Bars in center
     if state.paused {
-        render_flat_bars(pixmap, cx, cy, scale);
+        render_flat_bars(pixmap, cx, cy, scale, palette);
     } else {
-        render_bars(pixmap, anim, cx, cy, scale);
+        render_bars(pixmap, anim, cx, cy, scale, palette);
     }
 
     // Pause button (left)
@@ -1731,12 +1839,12 @@ fn render_hands_free_content(
             pause_cx,
             cy,
             13.0 * control_scale,
-            [255, 255, 255, (38.0 * control_alpha) as u8],
+            palette.control_fill((38.0 * control_alpha) as u8),
         );
         if state.paused {
-            draw_play_icon(pixmap, pause_cx, cy, control_scale, control_alpha);
+            draw_play_icon(pixmap, pause_cx, cy, control_scale, control_alpha, palette);
         } else {
-            draw_pause_icon(pixmap, pause_cx, cy, control_scale, control_alpha);
+            draw_pause_icon(pixmap, pause_cx, cy, control_scale, control_alpha, palette);
         }
 
         // Stop button (right)
@@ -1752,7 +1860,13 @@ fn render_hands_free_content(
     }
 }
 
-fn render_flat_bars(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, scale: f32) {
+fn render_flat_bars(
+    pixmap: &mut tiny_skia::Pixmap,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    palette: &OverlayPalette,
+) {
     let bar_w = BAR_W * scale;
     let bar_gap = BAR_GAP * scale;
     let bar_h = BAR_MIN_H * scale;
@@ -1762,7 +1876,7 @@ fn render_flat_bars(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, scale: f32
         let y = cy - bar_h / 2.0;
         let bar_path = rounded_rect(x, y, bar_w, bar_h, 1.5 * scale);
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.25).unwrap());
+        paint.set_color(color_from_rgba8(palette.bar(64)));
         paint.anti_alias = true;
         pixmap.fill_path(
             &bar_path,
@@ -1787,15 +1901,7 @@ fn render_circle_button(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, r: f32
     pb.close();
     if let Some(path) = pb.finish() {
         let mut paint = tiny_skia::Paint::default();
-        paint.set_color(
-            tiny_skia::Color::from_rgba(
-                color[0] as f32 / 255.0,
-                color[1] as f32 / 255.0,
-                color[2] as f32 / 255.0,
-                color[3] as f32 / 255.0,
-            )
-            .unwrap(),
-        );
+        paint.set_color(color_from_rgba8(color));
         paint.anti_alias = true;
         pixmap.fill_path(
             &path,
@@ -1807,9 +1913,18 @@ fn render_circle_button(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, r: f32
     }
 }
 
-fn draw_pause_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, scale: f32, alpha: f32) {
+fn draw_pause_icon(
+    pixmap: &mut tiny_skia::Pixmap,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    alpha: f32,
+    palette: &OverlayPalette,
+) {
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.9 * alpha).unwrap());
+    paint.set_color(color_from_rgba8(
+        palette.text((0.9 * alpha * 255.0).round().clamp(0.0, 255.0) as u8),
+    ));
     paint.anti_alias = true;
     // Two vertical bars
     let bar_w = 2.5 * scale;
@@ -1839,9 +1954,18 @@ fn draw_pause_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, scale: f32,
     );
 }
 
-fn draw_play_icon(pixmap: &mut tiny_skia::Pixmap, cx: f32, cy: f32, scale: f32, alpha: f32) {
+fn draw_play_icon(
+    pixmap: &mut tiny_skia::Pixmap,
+    cx: f32,
+    cy: f32,
+    scale: f32,
+    alpha: f32,
+    palette: &OverlayPalette,
+) {
     let mut paint = tiny_skia::Paint::default();
-    paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.9 * alpha).unwrap());
+    paint.set_color(color_from_rgba8(
+        palette.text((0.9 * alpha * 255.0).round().clamp(0.0, 255.0) as u8),
+    ));
     paint.anti_alias = true;
     let mut pb = tiny_skia::PathBuilder::new();
     let size = 6.0 * scale;
@@ -1881,6 +2005,7 @@ fn render_error_card(
     message: &str,
     cx: f32,
     cy: f32,
+    palette: &OverlayPalette,
 ) {
     let font_size = 14.0;
     let icon_w = 10.0;
@@ -1898,7 +2023,7 @@ fn render_error_card(
     let card_path = rounded_rect(card_x, card_y, card_w, card_h, card_r);
 
     let mut bg_paint = tiny_skia::Paint::default();
-    bg_paint.set_color(tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, 0.75).unwrap());
+    bg_paint.set_color(color_from_rgba8(palette.pill_fill(true)));
     bg_paint.anti_alias = true;
     pixmap.fill_path(
         &card_path,
@@ -1909,7 +2034,7 @@ fn render_error_card(
     );
 
     let mut border_paint = tiny_skia::Paint::default();
-    border_paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.3).unwrap());
+    border_paint.set_color(color_from_rgba8(palette.border(true)));
     border_paint.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: 1.0,
@@ -1946,7 +2071,7 @@ fn render_error_card(
         content_x + icon_w + gap,
         cy + font_size * 0.35,
         font_size,
-        [255, 255, 255, 230],
+        palette.text(230),
     );
 }
 
@@ -1957,6 +2082,7 @@ fn render_onboarding_card(
     hotkey_label: &str,
     cx: f32,
     cy: f32,
+    palette: &OverlayPalette,
 ) {
     let text = onboarding_card_text(step, hotkey_label);
     let font_size = 14.0;
@@ -1973,7 +2099,7 @@ fn render_onboarding_card(
     // Card background
     let card_path = rounded_rect(card_x, card_y, card_w, card_h, card_r);
     let mut bg_paint = tiny_skia::Paint::default();
-    bg_paint.set_color(tiny_skia::Color::from_rgba(0.06, 0.06, 0.1, 0.75).unwrap());
+    bg_paint.set_color(color_from_rgba8(palette.pill_fill(true)));
     bg_paint.anti_alias = true;
     pixmap.fill_path(
         &card_path,
@@ -1985,7 +2111,7 @@ fn render_onboarding_card(
 
     // Card border
     let mut border_paint = tiny_skia::Paint::default();
-    border_paint.set_color(tiny_skia::Color::from_rgba(1.0, 1.0, 1.0, 0.3).unwrap());
+    border_paint.set_color(color_from_rgba8(palette.border(true)));
     border_paint.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: 1.0,
@@ -2000,7 +2126,7 @@ fn render_onboarding_card(
         cx,
         cy + font_size * 0.35,
         font_size,
-        [255, 255, 255, 230],
+        palette.text(230),
     );
 }
 
@@ -2011,6 +2137,7 @@ fn render_keycap(
     x: f32,
     cy: f32,
     font_size: f32,
+    palette: &OverlayPalette,
 ) {
     let fr = match font {
         Some(f) => f,
@@ -2026,7 +2153,7 @@ fn render_keycap(
     // Keycap background
     let key_path = rounded_rect(x, ky, kw, kh, 5.0 * ui_scale);
     let mut bg = tiny_skia::Paint::default();
-    bg.set_color(tiny_skia::Color::from_rgba(0.25, 0.25, 0.25, 1.0).unwrap());
+    bg.set_color(color_from_rgba8(palette.key_fill()));
     bg.anti_alias = true;
     pixmap.fill_path(
         &key_path,
@@ -2038,7 +2165,7 @@ fn render_keycap(
 
     // Keycap border
     let mut border = tiny_skia::Paint::default();
-    border.set_color(tiny_skia::Color::from_rgba(0.45, 0.45, 0.45, 1.0).unwrap());
+    border.set_color(color_from_rgba8(palette.key_border()));
     border.anti_alias = true;
     let stroke = tiny_skia::Stroke {
         width: 1.0,
@@ -2053,7 +2180,7 @@ fn render_keycap(
         x + kw / 2.0,
         cy + font_size * 0.35,
         font_size,
-        [255, 255, 255, 255],
+        palette.text(255),
     );
 }
 

@@ -64,6 +64,8 @@ pub enum OutMessage {
         gradient_enabled: bool,
         #[serde(rename = "alwaysVisible")]
         always_visible: bool,
+        #[serde(rename = "appearanceMode")]
+        appearance_mode: String,
         #[serde(rename = "hotkeyLabel")]
         hotkey_label: String,
     },

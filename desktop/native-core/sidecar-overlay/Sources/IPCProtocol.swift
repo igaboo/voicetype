@@ -34,6 +34,7 @@ struct IPCMessage: Decodable {
     // config
     let gradientEnabled: Bool?
     let alwaysVisible: Bool?
+    let appearanceMode: String?
 }
 
 // MARK: - Outbound (Sidecar → Electron, stdout)

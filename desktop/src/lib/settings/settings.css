@@ -1,14 +1,17 @@
 /* Settings window */
 
 :root {
-  color-scheme: dark;
-  --settings-bg: #1f1f1f;
-  --settings-surface: #252525;
-  --settings-surface-hover: #2d2d2d;
-  --settings-surface-active: #303030;
-  --settings-border: #343434;
-  --settings-border-muted: #1f1f1f;
-  --settings-text-muted: #707070;
+  color-scheme: light dark;
+  --settings-bg: #f4f1ec;
+  --settings-surface: #fffaf3;
+  --settings-surface-hover: #eee9e2;
+  --settings-surface-active: #e8e1d8;
+  --settings-border: #d8d0c6;
+  --settings-border-muted: #ebe3d9;
+  --settings-text-muted: #756f67;
+  --settings-text-muted-active: #5f5850;
+  --settings-badge-bg: #ece6dd;
+  --settings-badge-text: #6e665d;
   --settings-primary: #0a84ff;
   --settings-primary-hover: #409cff;
   --settings-primary-soft: rgba(10, 132, 255, 0.14);
@@ -17,6 +20,22 @@
   --settings-radius-button: 7px;
   --settings-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif;
   --settings-mono: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --settings-bg: #1f1f1f;
+    --settings-surface: #252525;
+    --settings-surface-hover: #2d2d2d;
+    --settings-surface-active: #303030;
+    --settings-border: #343434;
+    --settings-border-muted: #1f1f1f;
+    --settings-text-muted: #707070;
+    --settings-text-muted-active: #9a9a9a;
+    --settings-badge-bg: #2a2a2a;
+    --settings-badge-text: #9a9a9a;
+  }
 }
 
 * {
@@ -62,6 +81,34 @@ label {
   font-size: 13px;
   line-height: 1.4;
   -webkit-font-smoothing: antialiased;
+}
+
+.settings-container[data-appearance-mode='light'] {
+  color-scheme: light;
+  --settings-bg: #f4f1ec;
+  --settings-surface: #fffaf3;
+  --settings-surface-hover: #eee9e2;
+  --settings-surface-active: #e8e1d8;
+  --settings-border: #d8d0c6;
+  --settings-border-muted: #ebe3d9;
+  --settings-text-muted: #756f67;
+  --settings-text-muted-active: #5f5850;
+  --settings-badge-bg: #ece6dd;
+  --settings-badge-text: #6e665d;
+}
+
+.settings-container[data-appearance-mode='dark'] {
+  color-scheme: dark;
+  --settings-bg: #1f1f1f;
+  --settings-surface: #252525;
+  --settings-surface-hover: #2d2d2d;
+  --settings-surface-active: #303030;
+  --settings-border: #343434;
+  --settings-border-muted: #1f1f1f;
+  --settings-text-muted: #707070;
+  --settings-text-muted-active: #9a9a9a;
+  --settings-badge-bg: #2a2a2a;
+  --settings-badge-text: #9a9a9a;
 }
 
 .settings-container.platform-macos {
@@ -188,7 +235,7 @@ label {
 }
 
 .section-nav-item.active .section-nav-description {
-  color: #9a9a9a;
+  color: var(--settings-text-muted-active);
 }
 
 .settings-main {
@@ -784,8 +831,8 @@ label {
   padding: 0 7px;
   border: 1px solid var(--settings-border);
   border-radius: 999px;
-  background: #2a2a2a;
-  color: #9a9a9a;
+  background: var(--settings-badge-bg);
+  color: var(--settings-badge-text);
   font-size: 10px;
   font-weight: 600;
   white-space: nowrap;

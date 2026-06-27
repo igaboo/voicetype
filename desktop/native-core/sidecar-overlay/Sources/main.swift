@@ -73,6 +73,7 @@ DispatchQueue.global(qos: .userInteractive).async {
                 panel.applyConfig(
                     gradientEnabled: msg.gradientEnabled,
                     alwaysVisible: msg.alwaysVisible,
+                    appearanceMode: msg.appearanceMode,
                     hotkeyLabel: msg.hotkeyLabel
                 )
 
