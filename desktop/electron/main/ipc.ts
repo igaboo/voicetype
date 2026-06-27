@@ -8,7 +8,13 @@ import {
   configureUpdater,
   downloadAndInstallElectronUpdate,
 } from "./updater";
-import { hideAppWindow, showAppWindow, windowLabelFor, type WindowLabel } from "./windows";
+import {
+  applyNativeAppearance,
+  hideAppWindow,
+  showAppWindow,
+  windowLabelFor,
+  type WindowLabel,
+} from "./windows";
 
 type InvokeArgs = Record<string, unknown>;
 
@@ -58,6 +64,12 @@ async function dispatchElectronLocal(
       return null;
     case "config.get":
       return loadConfig();
+    case "config.save": {
+      const result = await sidecar.invoke(command, args);
+      const config = await loadConfig();
+      applyNativeAppearance(config.appearanceMode);
+      return result;
+    }
     case "hotkey_capture.start": {
       const window = await showAppWindow("settings");
       startHotkeyCapture(window.webContents);
@@ -99,6 +111,7 @@ function isElectronLocalCommand(command: string): boolean {
     command === "window.open_main" ||
     command === "window.hide" ||
     command === "config.get" ||
+    command === "config.save" ||
     command === "hotkey_capture.start" ||
     command === "hotkey_capture.cancel" ||
     command === "history_menu.refresh" ||

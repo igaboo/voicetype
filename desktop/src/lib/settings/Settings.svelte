@@ -31,6 +31,7 @@
     type RuntimeUpdate,
   } from '../runtime/yap';
   import {
+    appearanceModes,
     backgroundAudioModes,
     fmtDefaultModels,
     fmtProviders,
@@ -43,6 +44,7 @@
     transcriptionProviders,
     txDefaultModels,
     type AppConfig,
+    type AppearanceMode,
     type BackgroundAudioMode,
     type HistoryEntry,
     type SectionId,
@@ -102,6 +104,7 @@
 
   // Behavior
   let soundsEnabled = $state(true);
+  let appearanceMode = $state<AppearanceMode>('system');
   let backgroundAudioMode = $state<BackgroundAudioMode>('mute');
   let gradientEnabled = $state(true);
   let alwaysVisiblePill = $state(true);
@@ -228,6 +231,7 @@
         oaiPrompt = cfg.oaiPrompt;
         geminiTemperature = cfg.geminiTemperature;
         soundsEnabled = cfg.soundsEnabled;
+        appearanceMode = cfg.appearanceMode ?? 'system';
         backgroundAudioMode = cfg.backgroundAudioMode;
         gradientEnabled = cfg.gradientEnabled;
         alwaysVisiblePill = cfg.alwaysVisiblePill;
@@ -292,6 +296,7 @@
       geminiTemperature,
       elLanguageCode: language.providerCode,
       soundsEnabled,
+      appearanceMode,
       backgroundAudioMode,
       gradientEnabled,
       alwaysVisiblePill,
@@ -347,6 +352,7 @@
     oaiPrompt;
     geminiTemperature;
     soundsEnabled;
+    appearanceMode;
     backgroundAudioMode;
     gradientEnabled;
     alwaysVisiblePill;
@@ -876,6 +882,7 @@
     oaiPrompt = '';
     geminiTemperature = 0;
     soundsEnabled = true;
+    appearanceMode = 'system';
     backgroundAudioMode = 'mute';
     gradientEnabled = true;
     alwaysVisiblePill = true;
@@ -993,11 +1000,11 @@
 <svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} />
 
 {#if loading}
-  <div class="settings-container loading-state">
+  <div class="settings-container loading-state" data-appearance-mode={appearanceMode}>
     <span>Loading...</span>
   </div>
 {:else}
-  <div class="settings-container" class:platform-macos={isMac}>
+  <div class="settings-container" class:platform-macos={isMac} data-appearance-mode={appearanceMode}>
     <div class="settings-titlebar" aria-hidden="true"></div>
     <div class="settings-body">
       <aside class="settings-sidebar" aria-label="Settings sections">
@@ -1141,6 +1148,23 @@
                   <span class="toggle-track"></span>
                   <span class="toggle-thumb"></span>
                 </label>
+              </div>
+
+              <div class="field-divider"></div>
+
+              <div class="field-row split">
+                <div class="field-copy">
+                  <span class="field-label">Appearance</span>
+                  <span class="field-description">Match the system or choose a fixed theme.</span>
+                </div>
+                <div class="segmented-control" role="radiogroup" aria-label="Appearance">
+                  {#each appearanceModes as mode}
+                    <label class="segment-option">
+                      <input type="radio" bind:group={appearanceMode} value={mode.value} />
+                      <span>{mode.label}</span>
+                    </label>
+                  {/each}
+                </div>
               </div>
 
               <div class="field-divider"></div>

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export type BackgroundAudioMode = "off" | "mute" | "pause";
+export type AppearanceMode = "system" | "light" | "dark";
 export type TranscriptionProvider = "none" | "gemini" | "openai" | "deepgram" | "elevenlabs";
 export type FormattingProvider = "none" | "gemini" | "openai" | "anthropic" | "groq";
 export type FormattingStyle = "casual" | "formatted" | "professional";
@@ -28,6 +29,7 @@ export interface AppConfig {
   geminiTemperature: number;
   elLanguageCode: string;
   soundsEnabled: boolean;
+  appearanceMode: AppearanceMode;
   backgroundAudioMode: BackgroundAudioMode;
   gradientEnabled: boolean;
   alwaysVisiblePill: boolean;
@@ -94,6 +96,7 @@ function defaultConfig(): AppConfig {
     geminiTemperature: 0,
     elLanguageCode: "",
     soundsEnabled: true,
+    appearanceMode: "system",
     backgroundAudioMode: "mute",
     gradientEnabled: true,
     alwaysVisiblePill: true,
@@ -120,6 +123,9 @@ function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfi
     oaiPrompt: stringOrDefault(config.oaiPrompt, ""),
     elLanguageCode: stringOrDefault(config.elLanguageCode, ""),
     speechLocale: stringOrDefault(config.speechLocale, ""),
+    appearanceMode: isAppearanceMode(config.appearanceMode)
+      ? config.appearanceMode
+      : defaults.appearanceMode,
     backgroundAudioMode: isBackgroundAudioMode(config.backgroundAudioMode)
       ? config.backgroundAudioMode
       : defaults.backgroundAudioMode,
@@ -132,4 +138,8 @@ function stringOrDefault(value: unknown, fallback: string): string {
 
 function isBackgroundAudioMode(value: unknown): value is BackgroundAudioMode {
   return value === "off" || value === "mute" || value === "pause";
+}
+
+function isAppearanceMode(value: unknown): value is AppearanceMode {
+  return value === "system" || value === "light" || value === "dark";
 }

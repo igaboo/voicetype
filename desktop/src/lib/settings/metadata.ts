@@ -1,6 +1,7 @@
 export type SectionId = 'general' | 'transcription' | 'formatting' | 'history' | 'advanced';
 export type UpdateStatus = 'idle' | 'checking' | 'available' | 'upToDate' | 'downloading' | 'ready' | 'error';
 export type BackgroundAudioMode = 'off' | 'mute' | 'pause';
+export type AppearanceMode = 'system' | 'light' | 'dark';
 
 export interface AppConfig {
   hotkey: string;
@@ -22,6 +23,7 @@ export interface AppConfig {
   geminiTemperature: number;
   elLanguageCode: string;
   soundsEnabled: boolean;
+  appearanceMode: AppearanceMode;
   backgroundAudioMode: BackgroundAudioMode;
   gradientEnabled: boolean;
   alwaysVisiblePill: boolean;
@@ -134,4 +136,10 @@ export const backgroundAudioModes: Array<{ value: BackgroundAudioMode; label: st
   { value: 'off', label: 'Off' },
   { value: 'mute', label: 'Mute' },
   { value: 'pause', label: 'Pause' },
+];
+
+export const appearanceModes: Array<{ value: AppearanceMode; label: string }> = [
+  { value: 'system', label: 'System' },
+  { value: 'light', label: 'Light' },
+  { value: 'dark', label: 'Dark' },
 ];

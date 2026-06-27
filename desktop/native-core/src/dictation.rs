@@ -1010,6 +1010,7 @@ fn emit_overlay_config(cfg: &AppConfig) {
     crate::sidecar::send(&crate::sidecar::OutMessage::Config {
         gradient_enabled: cfg.gradient_enabled,
         always_visible: cfg.always_visible_pill,
+        appearance_mode: cfg.appearance_mode.as_str().to_string(),
         hotkey_label: HotkeySpec::parse(&cfg.hotkey).label(),
     });
 }
@@ -1019,6 +1020,7 @@ fn emit_overlay_config(cfg: &AppConfig) {
     crate::win_overlay::update_state(|state| {
         state.gradient_enabled = cfg.gradient_enabled;
         state.always_visible = cfg.always_visible_pill;
+        state.appearance_mode = cfg.appearance_mode;
         state.hotkey_label = HotkeySpec::parse(&cfg.hotkey).label();
     });
 }

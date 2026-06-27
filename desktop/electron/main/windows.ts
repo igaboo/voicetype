@@ -1,11 +1,29 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, nativeTheme, shell, type NativeTheme } from "electron";
 import { join } from "node:path";
+import type { AppearanceMode } from "./config";
 import { appIconPath, appRoot, preloadPath, rendererDevUrl } from "./paths";
 
 export type WindowLabel = "main" | "settings";
 
 const windows = new Map<WindowLabel, BrowserWindow>();
 let isQuitting = false;
+
+const windowPalettes = {
+  dark: {
+    background: "#101215",
+    titleBar: "#101215",
+    titleBarSymbol: "#f6f7f9",
+  },
+  light: {
+    background: "#f4f1ec",
+    titleBar: "#f4f1ec",
+    titleBarSymbol: "#1d1a16",
+  },
+} as const;
+
+nativeTheme.on("updated", () => {
+  applyAppearanceToAllWindows();
+});
 
 app.on("before-quit", () => {
   isQuitting = true;
@@ -85,6 +103,11 @@ export function sendToAllWindows(event: string, payload?: unknown): void {
   }
 }
 
+export function applyNativeAppearance(mode: AppearanceMode): void {
+  nativeTheme.themeSource = mode as NativeTheme["themeSource"];
+  applyAppearanceToAllWindows();
+}
+
 export async function createMainWindow(): Promise<BrowserWindow> {
   const existing = getWindow("main");
   if (existing) return existing;
@@ -133,6 +156,7 @@ function createFramelessWindow(
     fullscreenable?: boolean;
   }
 ): BrowserWindow {
+  const palette = resolvedWindowPalette();
   const window = new BrowserWindow({
     ...options,
     show: false,
@@ -142,13 +166,13 @@ function createFramelessWindow(
       process.platform === "darwin"
         ? false
         : {
-            color: "#101215",
-            symbolColor: "#f6f7f9",
+            color: palette.titleBar,
+            symbolColor: palette.titleBarSymbol,
             height: 36,
           },
     trafficLightPosition: { x: 14, y: 14 },
     icon: appIconPath(),
-    backgroundColor: "#101215",
+    backgroundColor: palette.background,
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
@@ -180,6 +204,25 @@ function createFramelessWindow(
   });
 
   return window;
+}
+
+function applyAppearanceToAllWindows(): void {
+  const palette = resolvedWindowPalette();
+  for (const window of windows.values()) {
+    if (window.isDestroyed()) continue;
+    window.setBackgroundColor(palette.background);
+    if (process.platform !== "darwin") {
+      window.setTitleBarOverlay({
+        color: palette.titleBar,
+        symbolColor: palette.titleBarSymbol,
+        height: 36,
+      });
+    }
+  }
+}
+
+function resolvedWindowPalette(): (typeof windowPalettes)[keyof typeof windowPalettes] {
+  return nativeTheme.shouldUseDarkColors ? windowPalettes.dark : windowPalettes.light;
 }
 
 async function loadRenderer(window: BrowserWindow, label: WindowLabel): Promise<void> {

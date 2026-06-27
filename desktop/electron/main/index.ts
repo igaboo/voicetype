@@ -9,6 +9,7 @@ import { YapCoreSidecar } from "./sidecar";
 import { installTray, refreshHistoryMenu } from "./tray";
 import {
   activateAppWindow,
+  applyNativeAppearance,
   createMainWindow,
   hideAppIfNoWindowsVisible,
   sendToAllWindows,
@@ -32,7 +33,8 @@ app.whenReady().then(async () => {
   configureAppIdentity();
   Menu.setApplicationMenu(null);
   installIpcHandlers(sidecar);
-  await loadConfig();
+  const config = await loadConfig();
+  applyNativeAppearance(config.appearanceMode);
   await permissions.preflight();
   await installTray({
     setEnabled: async (enabled) => {

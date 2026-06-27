@@ -1,6 +1,51 @@
 import Cocoa
 import SwiftUI
 
+enum ProductAppearanceMode: String {
+    case system
+    case light
+    case dark
+
+    static func from(_ value: String?) -> ProductAppearanceMode? {
+        guard let value else { return nil }
+        return ProductAppearanceMode(rawValue: value) ?? .system
+    }
+
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .system: return nil
+        case .light: return .light
+        case .dark: return .dark
+        }
+    }
+}
+
+struct OverlayPalette {
+    let isDark: Bool
+
+    init(colorScheme: ColorScheme) {
+        isDark = colorScheme == .dark
+    }
+
+    var text: Color { isDark ? .white : Color(red: 0.12, green: 0.10, blue: 0.08) }
+    var secondaryText: Color { text.opacity(isDark ? 0.78 : 0.72) }
+    var subtleText: Color { text.opacity(isDark ? 0.5 : 0.54) }
+    var pillFill: Color { isDark ? .black : .white }
+    var pillExpandedOpacity: Double { isDark ? 0.75 : 0.82 }
+    var pillIdleOpacity: Double { isDark ? 0.4 : 0.58 }
+    var border: Color { isDark ? .white.opacity(0.3) : .black.opacity(0.14) }
+    var idleBorder: Color { isDark ? .white.opacity(0.35) : .black.opacity(0.18) }
+    var shadow: Color { .black.opacity(isDark ? 0.35 : 0.18) }
+    var lightShadow: Color { .black.opacity(isDark ? 0.1 : 0.08) }
+    var controlFill: Color { isDark ? .white.opacity(0.15) : .black.opacity(0.08) }
+    var actionFill: Color { isDark ? .white.opacity(0.9) : .black.opacity(0.84) }
+    var actionText: Color { isDark ? .black.opacity(0.88) : .white.opacity(0.96) }
+    var keyFill: Color { isDark ? Color(white: 0.25) : Color(red: 0.92, green: 0.90, blue: 0.86) }
+    var keyBorder: Color { isDark ? Color(white: 0.45) : .black.opacity(0.18) }
+    var keyShadow: Color { .black.opacity(isDark ? 0.5 : 0.16) }
+    var bar: Color { isDark ? .white : Color(red: 0.16, green: 0.14, blue: 0.12) }
+}
+
 // MARK: - Hit targets
 
 /// Small transparent child panel for the few regions that should remain clickable.
@@ -323,8 +368,9 @@ class OverlayPanel: NSPanel {
         }
     }
 
-    func applyConfig(gradientEnabled: Bool?, alwaysVisible: Bool?, hotkeyLabel: String?) {
+    func applyConfig(gradientEnabled: Bool?, alwaysVisible: Bool?, appearanceMode: String?, hotkeyLabel: String?) {
         if let g = gradientEnabled { overlayState.gradientEnabled = g }
+        if let mode = ProductAppearanceMode.from(appearanceMode) { overlayState.appearanceMode = mode }
         if let label = hotkeyLabel { overlayState.hotkeyLabel = label }
         if let visible = alwaysVisible {
             overlayState.alwaysVisible = visible
@@ -545,6 +591,7 @@ class OverlayState: ObservableObject {
     @Published var isHovering: Bool = false
     @Published var gradientEnabled: Bool = true
     @Published var alwaysVisible: Bool = true
+    @Published var appearanceMode: ProductAppearanceMode = .system
     @Published var recordingElapsed: TimeInterval = 0
     var onPermissionAction: (() -> Void)?
     var onPauseResume: (() -> Void)?
@@ -558,10 +605,12 @@ class OverlayState: ObservableObject {
 struct OverlayView: View {
     @ObservedObject var state: OverlayState
     @State private var shakeProgress: CGFloat = 0
+    @Environment(\.colorScheme) private var colorScheme
 
     private var isActive: Bool { state.mode != .idle || state.isOnboarding || state.permissionPrompt != nil }
     private var isExpanded: Bool { state.mode != .idle || state.isOnboarding || state.permissionPrompt != nil }
     private var isMinimized: Bool { state.mode == .idle && !state.isOnboarding && state.permissionPrompt == nil }
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     private var gradientEnergy: CGFloat {
         switch state.mode {
@@ -626,7 +675,7 @@ struct OverlayView: View {
                     if showRecordingTimer {
                         Text(formatElapsed(state.recordingElapsed))
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.5))
+                            .foregroundColor(palette.subtleText)
                             .fixedSize()
                             .transition(.opacity.combined(with: .offset(y: 12)))
                     }
@@ -643,15 +692,15 @@ struct OverlayView: View {
                     .padding(.vertical, 6)
                     .background(
                         ZStack {
-                            Capsule().fill(Color.black.opacity(isExpanded ? 0.75 : 0.4))
+                            Capsule().fill(palette.pillFill.opacity(isExpanded ? palette.pillExpandedOpacity : palette.pillIdleOpacity))
                             Capsule().fill(.thinMaterial)
                         }
-                        .shadow(color: .black.opacity(isExpanded ? 0.35 : 0.1),
+                        .shadow(color: isExpanded ? palette.shadow : palette.lightShadow,
                                 radius: isExpanded ? 16 : 6, y: isExpanded ? 4 : 2)
                     )
                     .overlay(
                         Capsule()
-                            .strokeBorder(Color.white.opacity(isExpanded ? 0.3 : 0.35),
+                            .strokeBorder(isExpanded ? palette.border : palette.idleBorder,
                                           lineWidth: isExpanded ? 1 : 1.5)
                     )
                     .contentShape(Capsule())
@@ -678,8 +727,8 @@ struct OverlayView: View {
                         if state.isHovering && isMinimized {
                             Text("Click to start transcribing")
                                 .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white)
-                                .shadow(color: .black.opacity(0.6), radius: 6, y: 2)
+                                .foregroundColor(palette.text)
+                                .shadow(color: palette.shadow, radius: 6, y: 2)
                                 .fixedSize()
                                 .allowsHitTesting(false)
                                 .offset(y: OverlayLayout.hoverTooltipYOffset)
@@ -704,6 +753,7 @@ struct OverlayView: View {
         .onChange(of: state.mode) { _ in
             if state.mode != .idle { state.isHovering = false }
         }
+        .preferredColorScheme(state.appearanceMode.colorScheme)
     }
 
     private var pillScale: CGFloat {
@@ -751,9 +801,9 @@ struct OverlayView: View {
 
                     Image(systemName: state.isPaused ? "play.fill" : "pause.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(palette.text.opacity(0.9))
                         .frame(width: 26, height: 26)
-                        .background(Circle().fill(Color.white.opacity(0.15)))
+                        .background(Circle().fill(palette.controlFill))
                         .contentShape(Circle())
                         .onTapGesture { state.onPauseResume?() }
                         .offset(x: state.isHandsFree ? -49 : 0)
@@ -787,7 +837,7 @@ struct OverlayView: View {
                 } else if state.isHovering {
                     Image(systemName: "mic.fill")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.9))
+                        .foregroundColor(palette.text.opacity(0.9))
                         .frame(width: 28, height: 28)
                         .transition(.opacity)
                 } else {
@@ -801,7 +851,7 @@ struct OverlayView: View {
         HStack(spacing: 2) {
             ForEach(0..<11, id: \.self) { _ in
                 RoundedRectangle(cornerRadius: 1.5)
-                    .fill(Color.white.opacity(0.25))
+                    .fill(palette.bar.opacity(0.25))
                     .frame(width: 3, height: 5)
             }
         }
@@ -842,19 +892,24 @@ struct LavaLampBackground: View {
 
 struct KeyCapView: View {
     let label: String
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
+
     var body: some View {
         Text(label)
             .font(.system(size: 12, weight: .semibold, design: .rounded))
-            .foregroundColor(.white)
+            .foregroundColor(palette.text)
             .padding(.horizontal, 10).padding(.vertical, 5)
-            .background(RoundedRectangle(cornerRadius: 5).fill(Color(white: 0.25)))
-            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(Color(white: 0.45), lineWidth: 1))
-            .shadow(color: .black.opacity(0.5), radius: 1, y: 1)
+            .background(RoundedRectangle(cornerRadius: 5).fill(palette.keyFill))
+            .overlay(RoundedRectangle(cornerRadius: 5).strokeBorder(palette.keyBorder, lineWidth: 1))
+            .shadow(color: palette.keyShadow, radius: 1, y: 1)
     }
 }
 
 struct ErrorCardView: View {
     let message: String
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -863,63 +918,65 @@ struct ErrorCardView: View {
                 .foregroundColor(.red)
             Text(message)
                 .font(.system(size: 15, weight: .medium))
-                .foregroundColor(.white.opacity(0.9))
+                .foregroundColor(palette.text.opacity(0.9))
                 .lineLimit(1)
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
         .fixedSize()
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 25).fill(Color.black.opacity(0.75))
+                RoundedRectangle(cornerRadius: 25).fill(palette.pillFill.opacity(palette.pillExpandedOpacity))
                 RoundedRectangle(cornerRadius: 25).fill(.thinMaterial)
             }
-            .shadow(color: .black.opacity(0.35), radius: 16, y: 4)
+            .shadow(color: palette.shadow, radius: 16, y: 4)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 25).strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 25).strokeBorder(palette.border, lineWidth: 1)
         )
     }
 }
 
 struct PermissionCardView: View {
     let prompt: PermissionPrompt
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     var body: some View {
         VStack(spacing: 9) {
             HStack(spacing: 7) {
                 Image(systemName: "lock.open.fill")
                     .font(.system(size: 12, weight: .semibold))
-                    .foregroundColor(.white.opacity(0.85))
+                    .foregroundColor(palette.text.opacity(0.85))
                 Text(prompt.title)
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundColor(.white)
+                    .foregroundColor(palette.text)
             }
 
             Text(prompt.message)
                 .font(.system(size: 13, weight: .medium))
-                .foregroundColor(.white.opacity(0.78))
+                .foregroundColor(palette.secondaryText)
                 .multilineTextAlignment(.center)
                 .lineLimit(4)
                 .frame(width: 315)
 
             Text(prompt.actionLabel)
                 .font(.system(size: 13, weight: .semibold))
-                .foregroundColor(.black.opacity(0.88))
+                .foregroundColor(palette.actionText)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(Capsule().fill(Color.white.opacity(0.9)))
+                .background(Capsule().fill(palette.actionFill))
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 18).fill(Color.black.opacity(0.78))
+                RoundedRectangle(cornerRadius: 18).fill(palette.pillFill.opacity(palette.pillExpandedOpacity))
                 RoundedRectangle(cornerRadius: 18).fill(.thinMaterial)
             }
-            .shadow(color: .black.opacity(0.35), radius: 16, y: 4)
+            .shadow(color: palette.shadow, radius: 16, y: 4)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 18).strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+            RoundedRectangle(cornerRadius: 18).strokeBorder(palette.border, lineWidth: 1)
         )
         .allowsHitTesting(false)
     }
@@ -928,6 +985,8 @@ struct PermissionCardView: View {
 struct PromptInlineView: View {
     let step: OnboardingStep
     var hotkeyLabel: String = "fn"
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     var body: some View {
         HStack(spacing: 6) {
@@ -936,30 +995,32 @@ struct PromptInlineView: View {
             Text(step == .welcome ? "to finish" : "to continue")
         }
         .font(.system(size: 12, weight: .medium))
-        .foregroundColor(.white.opacity(0.8))
+        .foregroundColor(palette.secondaryText)
     }
 }
 
 struct PromptCardView: View {
     let step: OnboardingStep
     var hotkeyLabel: String = "fn"
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     var body: some View {
         cardContent
             .font(.system(size: 15, weight: .medium))
-            .foregroundColor(.white)
+            .foregroundColor(palette.text)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 16).padding(.vertical, 10)
             .fixedSize()
             .background(
                 ZStack {
-                    RoundedRectangle(cornerRadius: 25).fill(Color.black.opacity(0.75))
+                    RoundedRectangle(cornerRadius: 25).fill(palette.pillFill.opacity(palette.pillExpandedOpacity))
                     RoundedRectangle(cornerRadius: 25).fill(.thinMaterial)
                 }
-                .shadow(color: .black.opacity(0.35), radius: 16, y: 4)
+                .shadow(color: palette.shadow, radius: 16, y: 4)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 25).strokeBorder(Color.white.opacity(0.3), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 25).strokeBorder(palette.border, lineWidth: 1)
             )
     }
 
@@ -995,6 +1056,8 @@ struct BarVisualizer: View {
     @State private var waveStrength: CGFloat = 0
     @State private var audioDecay: CGFloat = 1
     @State private var waveStart: Date? = nil
+    @Environment(\.colorScheme) private var colorScheme
+    private var palette: OverlayPalette { OverlayPalette(colorScheme: colorScheme) }
 
     var body: some View {
         TimelineView(.animation(paused: !isProcessing)) { timeline in
@@ -1027,7 +1090,7 @@ struct BarVisualizer: View {
                     let barOpacity = isActive ? (isProcessing ? shimmer : 0.9) : 0.25
 
                     RoundedRectangle(cornerRadius: 1.5)
-                        .fill(Color.white.opacity(barOpacity))
+                        .fill(palette.bar.opacity(barOpacity))
                         .frame(width: 3, height: barHeight)
                         .animation(.interpolatingSpring(stiffness: 280, damping: 18), value: bandLevel)
                         .animation(.easeOut(duration: 0.18), value: isActive)

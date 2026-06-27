@@ -20,6 +20,31 @@ impl Default for BackgroundAudioMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AppearanceMode {
+    Light,
+    Dark,
+    #[serde(other)]
+    System,
+}
+
+impl AppearanceMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::System => "system",
+            Self::Light => "light",
+            Self::Dark => "dark",
+        }
+    }
+}
+
+impl Default for AppearanceMode {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
 /// Full app configuration, plus serde defaults for each persisted field.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,6 +126,10 @@ pub struct AppConfig {
     #[serde(default = "default_true")]
     pub sounds_enabled: bool,
 
+    /// Product appearance preference.
+    #[serde(default)]
+    pub appearance_mode: AppearanceMode,
+
     /// How Yap should handle background audio while recording.
     #[serde(default)]
     pub background_audio_mode: BackgroundAudioMode,
@@ -176,6 +205,7 @@ impl Default for AppConfig {
             gemini_temperature: 0.0,
             el_language_code: String::new(),
             sounds_enabled: true,
+            appearance_mode: AppearanceMode::System,
             background_audio_mode: BackgroundAudioMode::Mute,
             gradient_enabled: true,
             always_visible_pill: true,
