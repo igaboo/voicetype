@@ -3,11 +3,14 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 const outputDir = resolve("release-electron");
-const requireTrustedSigning =
-  process.env.YAP_REQUIRE_MAC_TRUSTED_SIGNING === "1" || process.env.YAP_REQUIRE_MAC_SIGNING === "1";
+const requireTrustedSigning = process.env.YAP_REQUIRE_MAC_TRUSTED_SIGNING === "1";
 const requiredEntitlements = [
   "com.apple.security.device.audio-input",
   "com.apple.security.personal-information.speech-recognition",
+];
+const forbiddenEntitlements = [
+  "com.apple.security.cs.allow-unsigned-executable-memory",
+  "com.apple.security.cs.disable-library-validation",
 ];
 
 if (process.platform !== "darwin") {
@@ -47,6 +50,13 @@ for (const target of targets) {
   for (const entitlement of requiredEntitlements) {
     if (!entitlements.includes(`<key>${entitlement}</key>`)) {
       console.error(`${target.label} is missing entitlement: ${entitlement}`);
+      process.exit(1);
+    }
+  }
+
+  for (const entitlement of forbiddenEntitlements) {
+    if (entitlements.includes(`<key>${entitlement}</key>`)) {
+      console.error(`${target.label} includes forbidden entitlement: ${entitlement}`);
       process.exit(1);
     }
   }

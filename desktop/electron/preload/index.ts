@@ -117,14 +117,10 @@ const bridge: YapBridge = {
     check: async () => {
       const update = await invoke<{
         version: string;
-        canInstallInApp?: boolean;
-        releaseUrl?: string;
       } | null>("updater.check");
       if (!update) return null;
       return {
         version: update.version,
-        canInstallInApp: update.canInstallInApp ?? true,
-        releaseUrl: update.releaseUrl,
         downloadAndInstall: async (onEvent) => {
           updaterDownloadHandler = onEvent ?? null;
           try {

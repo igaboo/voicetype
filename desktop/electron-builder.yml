@@ -31,6 +31,7 @@ mac:
   minimumSystemVersion: "26.0"
   entitlements: electron/entitlements.mac.plist
   entitlementsInherit: electron/entitlements.mac.inherit.plist
+  notarize: true
   extendInfo:
     LSMinimumSystemVersion: "26.0"
     NSMicrophoneUsageDescription: Yap records your voice so it can transcribe and paste what you say.
