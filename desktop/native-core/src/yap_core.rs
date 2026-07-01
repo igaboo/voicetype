@@ -7,6 +7,7 @@ use serde_json::{json, Value};
 use yap_core_lib::commands::{self, CommandHost};
 use yap_core_lib::config::AppConfig;
 use yap_core_lib::dictation::{self, DictationHost};
+use yap_core_lib::model_manager::WhisperDownloadRequest;
 
 #[derive(Debug, Deserialize)]
 struct RpcRequest {
@@ -53,6 +54,10 @@ impl CommandHost for SidecarHost {
                 });
             }
         }
+    }
+
+    fn emit(&self, event: &'static str, payload: Value) {
+        let _ = self.output.send(RpcOutput::Event { event, payload });
     }
 }
 
@@ -138,6 +143,47 @@ fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<
             commands::delete_all_history()?;
             Ok(Some(json!({ "cleared": true })))
         }
+        "models.whisper.list" => to_value(commands::list_whisper_models()?).map(Some),
+        "models.whisper.search" => {
+            let request = parse_params(request.params)?;
+            to_value(commands::search_whisper_models(request)?).map(Some)
+        }
+        "models.whisper.download" => {
+            let download: WhisperDownloadRequest = parse_params(request.params)?;
+            let download_id = download.id.clone();
+            let download_file_name = download.file_name.clone();
+            let worker_download_id = download_id.clone();
+            let worker_download_file_name = download_file_name.clone();
+            let host = Arc::clone(&host);
+            std::thread::spawn(move || {
+                if let Err(error) = commands::download_whisper_model(download, host.as_ref()) {
+                    CommandHost::emit(
+                        host.as_ref(),
+                        "models:download",
+                        json!({
+                            "id": worker_download_id,
+                            "fileName": worker_download_file_name,
+                            "status": "error",
+                            "error": error,
+                        }),
+                    );
+                }
+            });
+            Ok(Some(json!({
+                "started": true,
+                "id": download_id,
+                "fileName": download_file_name,
+            })))
+        }
+        "models.whisper.delete" => {
+            let file_name = required_string_param(request.params, "fileName")?;
+            commands::delete_whisper_model(&file_name)?;
+            Ok(Some(json!({ "deleted": true })))
+        }
+        "models.whisper.reveal" => {
+            commands::reveal_whisper_models()?;
+            Ok(Some(json!({ "revealed": true })))
+        }
         "audio.list_devices" => to_value(commands::audio_device_names()).map(Some),
         "runtime.start" => {
             let host: Arc<dyn DictationHost> = host;
@@ -150,6 +196,11 @@ fn handle_request(request: RpcRequest, host: Arc<SidecarHost>) -> Result<Option<
         }
         other => Err(format!("unknown method: {other}")),
     }
+}
+
+fn parse_params<T: for<'de> Deserialize<'de>>(params: Option<Value>) -> Result<T, String> {
+    serde_json::from_value(params.unwrap_or_else(|| json!({})))
+        .map_err(|err| format!("invalid params: {err}"))
 }
 
 fn parse_config_params(params: Option<Value>) -> Result<AppConfig, String> {

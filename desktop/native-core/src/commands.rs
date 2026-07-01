@@ -1,9 +1,14 @@
 use crate::audio;
 use crate::config::{self, AppConfig};
 use crate::history::{self, HistoryEntry};
+use crate::model_manager::{
+    self, WhisperDownloadRequest, WhisperModelList, WhisperModelSearchRequest, WhisperModelSummary,
+};
+use serde_json::Value;
 
 pub trait CommandHost: Send + Sync + 'static {
     fn on_settings_changed(&self) {}
+    fn emit(&self, _event: &'static str, _payload: Value) {}
 }
 
 pub fn store_config(cfg: AppConfig, host: &dyn CommandHost) -> Result<(), String> {
@@ -26,4 +31,31 @@ pub fn delete_history_entry(id: &str) -> Result<(), String> {
 
 pub fn delete_all_history() -> Result<(), String> {
     history::clear()
+}
+
+pub fn list_whisper_models() -> Result<WhisperModelList, String> {
+    model_manager::list_whisper_models()
+}
+
+pub fn search_whisper_models(
+    request: WhisperModelSearchRequest,
+) -> Result<Vec<WhisperModelSummary>, String> {
+    model_manager::search_whisper_models(request)
+}
+
+pub fn download_whisper_model(
+    request: WhisperDownloadRequest,
+    host: &dyn CommandHost,
+) -> Result<WhisperModelSummary, String> {
+    model_manager::download_whisper_model(request, |payload| {
+        host.emit("models:download", payload);
+    })
+}
+
+pub fn delete_whisper_model(file_name: &str) -> Result<(), String> {
+    model_manager::delete_whisper_model(file_name)
+}
+
+pub fn reveal_whisper_models() -> Result<(), String> {
+    model_manager::reveal_whisper_models()
 }

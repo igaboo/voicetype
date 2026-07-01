@@ -5,7 +5,13 @@ import { join } from "node:path";
 
 export type BackgroundAudioMode = "off" | "mute" | "pause";
 export type AppearanceMode = "system" | "light" | "dark";
-export type TranscriptionProvider = "none" | "gemini" | "openai" | "deepgram" | "elevenlabs";
+export type TranscriptionProvider =
+  | "none"
+  | "localwhisper"
+  | "gemini"
+  | "openai"
+  | "deepgram"
+  | "elevenlabs";
 export type FormattingProvider = "none" | "gemini" | "openai" | "anthropic" | "groq";
 export type FormattingStyle = "casual" | "formatted" | "professional";
 
@@ -80,7 +86,7 @@ function defaultConfig(): AppConfig {
     hotkey: process.platform === "win32" ? "capslock" : "fn",
     audioDevice: "",
     pressEnterAfterPaste: false,
-    txProvider: process.platform === "win32" ? "openai" : "none",
+    txProvider: process.platform === "win32" ? "localwhisper" : "none",
     txApiKey: "",
     txModel: "",
     fmtProvider: "none",
@@ -108,9 +114,11 @@ function defaultConfig(): AppConfig {
 function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfig {
   const defaults = defaultConfig();
   const config = { ...defaults, ...(input ?? {}) };
+  const txProvider = normalizeTranscriptionProvider(config.txProvider, defaults.txProvider);
 
   return {
     ...config,
+    txProvider,
     hotkey: stringOrDefault(config.hotkey, defaults.hotkey),
     audioDevice: stringOrDefault(config.audioDevice, ""),
     txApiKey: stringOrDefault(config.txApiKey, ""),
@@ -130,6 +138,24 @@ function normalizeConfig(input: Partial<AppConfig> | null | undefined): AppConfi
       ? config.backgroundAudioMode
       : defaults.backgroundAudioMode,
   };
+}
+
+function isTranscriptionProvider(value: unknown): value is TranscriptionProvider {
+  return (
+    value === "none" ||
+    value === "localwhisper" ||
+    value === "gemini" ||
+    value === "openai" ||
+    value === "deepgram" ||
+    value === "elevenlabs"
+  );
+}
+
+function normalizeTranscriptionProvider(
+  value: unknown,
+  fallback: TranscriptionProvider
+): TranscriptionProvider {
+  return isTranscriptionProvider(value) ? value : fallback;
 }
 
 function stringOrDefault(value: unknown, fallback: string): string {

@@ -42,12 +42,16 @@
     styleData,
     styleExampleInput,
     transcriptionProviders,
+    transcriptionProviderRequiresApiKey,
     txDefaultModels,
     type AppConfig,
     type AppearanceMode,
     type BackgroundAudioMode,
     type HistoryEntry,
     type SectionId,
+    type WhisperDownloadEvent,
+    type WhisperModelList,
+    type WhisperModelSummary,
     type UpdateStatus,
   } from './metadata';
 
@@ -58,10 +62,9 @@
   const isMac = userAgent.includes('macintosh') || userAgent.includes('mac os');
   const hasNativeRuntime = isNativeRuntime();
   const defaultHotkey = isWindows ? 'capslock' : 'fn';
-  const defaultTxProvider = isWindows ? 'openai' : 'none';
+  const defaultTxProvider = isWindows ? 'localwhisper' : 'none';
   const buildLabel = `v${__APP_VERSION__} (${__GIT_COMMIT_SHORT__})`;
   const buildUrl = __GITHUB_COMMIT_URL__;
-  const releasesUrl = 'https://github.com/oobagi/yap/releases/latest';
 
   const txProviders = transcriptionProviders(isWindows);
 
@@ -87,6 +90,17 @@
   let txModel = $state('');
   let txLanguage = $state('auto');
   let showTxApiKey = $state(false);
+  let lastTxProvider = defaultTxProvider;
+  let whisperModelList = $state<WhisperModelList | null>(null);
+  let whisperModelsLoading = $state(false);
+  let whisperModelsLoaded = $state(false);
+  let whisperModelsError = $state('');
+  let whisperSearchQuery = $state('');
+  let whisperSearchResults = $state<WhisperModelSummary[]>([]);
+  let whisperSearchLoading = $state(false);
+  let whisperSearchError = $state('');
+  let whisperDownloadEvent = $state<WhisperDownloadEvent | null>(null);
+  let pendingWhisperUseAfterDownload = $state<string | null>(null);
 
   // Transcription provider options
   let dgSmartFormat = $state(true);
@@ -150,7 +164,7 @@
 
   // Updates
   let updateStatus = $state<UpdateStatus>('idle');
-  let updateMessage = $state('Check for updates from GitHub Releases.');
+  let updateMessage = $state('Check for signed Yap updates.');
   let updateVersion = $state('');
   let updateDownloaded = $state(0);
   let updateTotal = $state<number | null>(null);
@@ -160,7 +174,18 @@
   // ── Derived ───────────────────────────────────────────────────────────
 
   let hasTxProvider = $derived(txProvider !== 'none');
+  let txProviderRequiresApiKey = $derived(transcriptionProviderRequiresApiKey(txProvider));
   let hasFmtProvider = $derived(fmtProvider !== 'none');
+  let txModelLabel = $derived(txProviderRequiresApiKey ? 'Model' : 'Model Spec');
+  let txModelDescription = $derived.by(() => {
+    if (txProviderRequiresApiKey) {
+      return `Override the default model, or leave empty to use ${txDefaultModels[txProvider] ?? 'none'}.`;
+    }
+    if (txProvider === 'localwhisper') {
+      return 'Use a whisper.cpp GGML model path, or an id stored in Yap model folders such as base.en.';
+    }
+    return 'Provide a local model path or spec for this provider.';
+  });
 
   let canShareApiKey = $derived.by(() => {
     if (!hasTxProvider || !hasFmtProvider) return false;
@@ -175,6 +200,19 @@
   );
 
   let currentStyleData = $derived(styleData[fmtStyle] ?? styleData.formatted);
+  let effectiveWhisperModelId = $derived(txModel.trim() || txDefaultModels.localwhisper);
+  let recommendedWhisperModel = $derived.by(() => {
+    const list = whisperModelList;
+    return list?.models.find((model) => model.id === list.recommendedId) ?? null;
+  });
+  let selectedWhisperModel = $derived.by(() => (
+    whisperModelList?.models.find((model) => model.id === effectiveWhisperModelId || model.path === txModel.trim()) ?? null
+  ));
+  let recommendedWhisperMissing = $derived(
+    txProvider === 'localwhisper' &&
+      !recommendedWhisperModel?.installed &&
+      (!txModel.trim() || txModel.trim() === txDefaultModels.localwhisper)
+  );
 
   function languageOptionFor(value: string) {
     return languageOptions.find((option) => option.value === value) ?? languageOptions[0];
@@ -220,6 +258,7 @@
         txProvider = isWindows && cfg.txProvider === 'none' ? defaultTxProvider : cfg.txProvider;
         txApiKey = cfg.txApiKey;
         txModel = cfg.txModel;
+        lastTxProvider = txProvider;
         txLanguage = languageValueFromConfig(cfg);
         fmtProvider = cfg.fmtProvider;
         fmtApiKey = cfg.fmtApiKey;
@@ -264,6 +303,152 @@
     if (selectedMic && !devices.includes(selectedMic)) {
       microphones = [selectedMic, ...devices];
     }
+  }
+
+  async function loadWhisperModels() {
+    if (!hasNativeRuntime) return;
+
+    whisperModelsLoading = true;
+    whisperModelsError = '';
+    try {
+      const result = await invokeRuntimeOptional<WhisperModelList>('models.whisper.list', undefined, 10000);
+      if (!result) {
+        whisperModelsError = 'Could not load Local Whisper models.';
+        whisperModelsLoaded = true;
+        return;
+      }
+      whisperModelList = result;
+      whisperModelsLoaded = true;
+    } catch (error) {
+      whisperModelsError = error instanceof Error ? error.message : String(error);
+      whisperModelsLoaded = true;
+      console.error('Failed to load Whisper models:', error);
+    } finally {
+      whisperModelsLoading = false;
+    }
+  }
+
+  async function searchWhisperModels() {
+    const query = whisperSearchQuery.trim();
+    if (!hasNativeRuntime || query.length < 2) {
+      whisperSearchResults = [];
+      return;
+    }
+
+    whisperSearchLoading = true;
+    whisperSearchError = '';
+    try {
+      whisperSearchResults = await invokeRuntime<WhisperModelSummary[]>('models.whisper.search', { query });
+    } catch (error) {
+      whisperSearchError = error instanceof Error ? error.message : String(error);
+      whisperSearchResults = [];
+      console.error('Failed to search Whisper models:', error);
+    } finally {
+      whisperSearchLoading = false;
+    }
+  }
+
+  async function downloadWhisperModel(model: WhisperModelSummary, useAfterDownload = true) {
+    if (!hasNativeRuntime || !model.url || isAnyWhisperDownloadActive()) return;
+
+    whisperModelsError = '';
+    whisperDownloadEvent = {
+      id: model.id,
+      fileName: model.fileName,
+      status: 'started',
+      total: model.sizeBytes,
+    };
+    pendingWhisperUseAfterDownload = useAfterDownload ? model.id : null;
+
+    try {
+      await invokeRuntime('models.whisper.download', {
+        id: model.id,
+        url: model.url,
+        fileName: model.fileName,
+        expectedSize: model.sizeBytes,
+      });
+    } catch (error) {
+      whisperModelsError = error instanceof Error ? error.message : String(error);
+      pendingWhisperUseAfterDownload = null;
+      console.error('Failed to download Whisper model:', error);
+    }
+  }
+
+  async function useWhisperModel(model: WhisperModelSummary) {
+    txModel = model.id;
+  }
+
+  async function deleteWhisperModel(model: WhisperModelSummary) {
+    if (!hasNativeRuntime || !model.installed) return;
+
+    const confirmed = await confirmAction(
+      `Delete ${model.name}? This only removes the cached model file from Yap.`,
+      'Delete'
+    );
+    if (!confirmed) return;
+
+    try {
+      await invokeRuntime('models.whisper.delete', { fileName: model.fileName });
+      if (txModel === model.id || txModel === model.path) {
+        txModel = '';
+      }
+      whisperModelsLoaded = false;
+      await loadWhisperModels();
+    } catch (error) {
+      whisperModelsError = error instanceof Error ? error.message : String(error);
+      console.error('Failed to delete Whisper model:', error);
+    }
+  }
+
+  async function revealWhisperModels() {
+    if (!hasNativeRuntime) return;
+
+    try {
+      await invokeRuntime('models.whisper.reveal');
+    } catch (error) {
+      whisperModelsError = error instanceof Error ? error.message : String(error);
+      console.error('Failed to reveal Whisper model folder:', error);
+    }
+  }
+
+  function isSelectedWhisperModel(model: WhisperModelSummary): boolean {
+    const modelValue = txModel.trim();
+    if (!modelValue && model.id === txDefaultModels.localwhisper) return true;
+    return modelValue === model.id || modelValue === model.path;
+  }
+
+  function isDownloadingWhisperModel(model: WhisperModelSummary): boolean {
+    return (
+      whisperDownloadEvent?.fileName === model.fileName &&
+      (whisperDownloadEvent.status === 'started' || whisperDownloadEvent.status === 'progress')
+    );
+  }
+
+  function isAnyWhisperDownloadActive(): boolean {
+    return whisperDownloadEvent?.status === 'started' || whisperDownloadEvent?.status === 'progress';
+  }
+
+  function whisperDownloadProgress(model: WhisperModelSummary): number {
+    if (!isDownloadingWhisperModel(model)) return 0;
+    const event = whisperDownloadEvent;
+    if (!event) return 0;
+    if (event.percent !== undefined) return clampPercent(event.percent);
+    if (!event.total || !event.transferred) return 0;
+    return clampPercent((event.transferred / event.total) * 100);
+  }
+
+  function whisperDownloadLabel(model: WhisperModelSummary): string {
+    const event = isDownloadingWhisperModel(model) ? whisperDownloadEvent : null;
+    if (!event) return '';
+    if (event.total && event.transferred !== undefined) {
+      return `${formatBytes(event.transferred)} of ${formatBytes(event.total)}`;
+    }
+    if (event.transferred !== undefined) return formatBytes(event.transferred);
+    return 'Starting';
+  }
+
+  function modelMeta(model: WhisperModelSummary): string {
+    return [model.sizeLabel, model.speedHint, model.accuracyHint].filter(Boolean).join(' · ');
   }
 
   async function refreshConfig() {
@@ -360,6 +545,18 @@
     fmtUseSameKey;
 
     scheduleSave();
+  });
+
+  $effect(() => {
+    if (txProvider === 'localwhisper' && !whisperModelsLoaded && !whisperModelsLoading) {
+      void loadWhisperModels();
+    }
+  });
+
+  $effect(() => {
+    if (!configReady || loading || txProvider === lastTxProvider) return;
+    lastTxProvider = txProvider;
+    txModel = '';
   });
 
   // ── Close Window ──────────────────────────────────────────────────────
@@ -718,10 +915,6 @@
     return `${formatBytes(updateDownloaded)} of ${formatBytes(updateTotal)}`;
   }
 
-  function canInstallPendingUpdateInApp(): boolean {
-    return pendingUpdate?.canInstallInApp ?? true;
-  }
-
   function clampPercent(value: number): number {
     return Math.max(0, Math.min(100, Math.round(value)));
   }
@@ -744,7 +937,7 @@
   function updaterErrorMessage(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes('latest-mac.yml') || message.includes('latest.yml') || message.includes('update metadata')) {
-      return 'No in-app update metadata is available. Download the latest release from GitHub Releases.';
+      return 'No signed update metadata is available for this release.';
     }
     if (message.includes('signature')) {
       return 'The update could not be verified, so Yap did not install it.';
@@ -775,9 +968,7 @@
       pendingUpdate = update;
       updateVersion = update.version;
       updateStatus = 'available';
-      updateMessage = update.canInstallInApp
-        ? `Yap ${update.version} is ready to install.`
-        : `Yap ${update.version} is available from GitHub Releases.`;
+      updateMessage = `Yap ${update.version} is ready to install.`;
     } catch (error) {
       pendingUpdate = null;
       updateStatus = 'error';
@@ -788,10 +979,6 @@
 
   async function installUpdate() {
     if (!pendingUpdate || updateBusy()) return;
-    if (!pendingUpdate.canInstallInApp) {
-      await openUpdateRelease();
-      return;
-    }
 
     const version = pendingUpdate.version;
     const confirmed = await confirmAction(
@@ -831,18 +1018,6 @@
       updateStatus = 'error';
       updateMessage = updaterErrorMessage(error);
       console.error('Failed to install update:', error);
-    }
-  }
-
-  async function openUpdateRelease() {
-    if (!pendingUpdate) return;
-
-    try {
-      await openExternal(pendingUpdate.releaseUrl ?? releasesUrl);
-    } catch (error) {
-      updateStatus = 'error';
-      updateMessage = 'Could not open GitHub Releases.';
-      console.error('Failed to open update release:', error);
     }
   }
 
@@ -907,11 +1082,16 @@
   let unlistenShowHistory: (() => void) | undefined;
   let unlistenShowUpdates: (() => void) | undefined;
   let unlistenHistoryCleared: (() => void) | undefined;
+  let unlistenWhisperDownload: (() => void) | undefined;
 
   if (hasNativeRuntime) {
     onRuntimeFocusChanged((focused) => {
       if (focused) {
         void refreshConfig();
+        if (txProvider === 'localwhisper') {
+          whisperModelsLoaded = false;
+          void loadWhisperModels();
+        }
         if (activeSection === 'history' || historyLoadStarted) {
           void loadHistory();
         }
@@ -977,6 +1157,24 @@
       .then((fn) => {
         unlistenHistoryCleared = fn;
       });
+
+    listenRuntimeEvent<WhisperDownloadEvent>('models:download', (payload) => {
+      whisperDownloadEvent = payload;
+      if (payload.status === 'finished') {
+        if (txProvider === 'localwhisper' && pendingWhisperUseAfterDownload === payload.id) {
+          txModel = payload.id;
+        }
+        pendingWhisperUseAfterDownload = null;
+        whisperModelsLoaded = false;
+        void loadWhisperModels();
+      } else if (payload.status === 'error') {
+        whisperModelsError = payload.error ?? 'Model download failed.';
+        pendingWhisperUseAfterDownload = null;
+      }
+    })
+      .then((fn) => {
+        unlistenWhisperDownload = fn;
+      });
   }
 
   onDestroy(() => {
@@ -987,6 +1185,7 @@
     unlistenShowHistory?.();
     unlistenShowUpdates?.();
     unlistenHistoryCleared?.();
+    unlistenWhisperDownload?.();
     if (saveTimer) clearTimeout(saveTimer);
     for (const timeout of copyTimeouts.values()) {
       clearTimeout(timeout);
@@ -1261,50 +1460,229 @@
               {#if hasTxProvider}
                 <div class="field-divider"></div>
 
-                <div class="field-row">
-                  <span class="field-label">API Key</span>
-                  <div class="password-wrapper">
+                {#if txProviderRequiresApiKey}
+                  <div class="field-row">
+                    <span class="field-label">API Key</span>
+                    <div class="password-wrapper">
+                      <input
+                        class="input"
+                        type={showTxApiKey ? 'text' : 'password'}
+                        placeholder="Required"
+                        bind:value={txApiKey}
+                        autocomplete="off"
+                      />
+                      <button
+                        class="password-toggle"
+                        onclick={() => { showTxApiKey = !showTxApiKey; }}
+                        aria-label={showTxApiKey ? 'Hide API key' : 'Show API key'}
+                        type="button"
+                      >
+                        {#if showTxApiKey}
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                            <circle cx="8" cy="8" r="2"/>
+                          </svg>
+                        {:else}
+                          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                            <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
+                            <circle cx="8" cy="8" r="2"/>
+                            <line x1="2" y1="14" x2="14" y2="2"/>
+                          </svg>
+                        {/if}
+                      </button>
+                    </div>
+                  </div>
+                {/if}
+
+                {#if txProvider === 'localwhisper'}
+                  <div class="field-row">
+                    <div class="local-models-header">
+                      <div class="field-copy">
+                        <span class="field-label">Local Models</span>
+                        <span class="field-description">
+                          Whisper models are stored in Yap's cache and are not bundled with the app.
+                        </span>
+                      </div>
+                      <button class="btn" type="button" onclick={revealWhisperModels}>Reveal</button>
+                    </div>
+
+                    {#if recommendedWhisperMissing && recommendedWhisperModel}
+                      <div class="model-setup-state">
+                        <div class="field-copy">
+                          <span class="model-setup-title">Recommended model missing</span>
+                          <span class="field-description">
+                            Download {recommendedWhisperModel.name} before using Local Whisper.
+                          </span>
+                        </div>
+                        <button
+                          class="btn btn-primary"
+                          type="button"
+                          aria-label={`Download recommended model ${recommendedWhisperModel.name}`}
+                          disabled={isAnyWhisperDownloadActive()}
+                          onclick={() => downloadWhisperModel(recommendedWhisperModel)}
+                        >
+                          {isDownloadingWhisperModel(recommendedWhisperModel) ? 'Downloading' : 'Download recommended model'}
+                        </button>
+                      </div>
+                    {/if}
+
+                    {#if whisperModelsLoading && !whisperModelList}
+                      <div class="history-empty-state">
+                        <span>Loading models...</span>
+                      </div>
+                    {:else if whisperModelList}
+                      <div class="model-list">
+                        {#each whisperModelList.models as model}
+                          <div class="model-row" class:selected={isSelectedWhisperModel(model)}>
+                            <div class="model-main">
+                              <div class="model-title-row">
+                                <span class="model-name">{model.name}</span>
+                                {#if model.installed}
+                                  <span class="model-status installed">Installed</span>
+                                {:else}
+                                  <span class="model-status">Not installed</span>
+                                {/if}
+                              </div>
+                              <span class="field-description">{modelMeta(model) || model.fileName}</span>
+                              {#if isDownloadingWhisperModel(model)}
+                                <div
+                                  class="model-progress"
+                                  role="progressbar"
+                                  aria-label={`Download progress for ${model.name}`}
+                                  aria-valuemin="0"
+                                  aria-valuemax="100"
+                                  aria-valuenow={whisperDownloadProgress(model)}
+                                >
+                                  <div class="model-progress-header">
+                                    <span>{whisperDownloadLabel(model)}</span>
+                                    <span>{whisperDownloadProgress(model)}%</span>
+                                  </div>
+                                  <div class="update-progress-track">
+                                    <div class="update-progress-fill" style={`width: ${whisperDownloadProgress(model)}%`}></div>
+                                  </div>
+                                </div>
+                              {/if}
+                            </div>
+                            <div class="model-actions">
+                              {#if model.installed}
+                                <button
+                                  class="btn"
+                                  class:btn-primary={isSelectedWhisperModel(model)}
+                                  type="button"
+                                  aria-label={`Use model ${model.name}`}
+                                  onclick={() => useWhisperModel(model)}
+                                  disabled={isSelectedWhisperModel(model)}
+                                >
+                                  {isSelectedWhisperModel(model) ? 'Using' : 'Use'}
+                                </button>
+                                <button
+                                  class="btn btn-danger"
+                                  type="button"
+                                  aria-label={`Delete model ${model.name}`}
+                                  onclick={() => deleteWhisperModel(model)}
+                                >
+                                  Delete
+                                </button>
+                              {:else}
+                                <button
+                                  class="btn"
+                                  type="button"
+                                  aria-label={`Download model ${model.name}`}
+                                  disabled={!model.url || isAnyWhisperDownloadActive()}
+                                  onclick={() => downloadWhisperModel(model)}
+                                >
+                                  {isDownloadingWhisperModel(model) ? 'Downloading' : 'Download'}
+                                </button>
+                              {/if}
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+
+                    {#if whisperModelsError}
+                      <span class="field-description update-error">{whisperModelsError}</span>
+                    {/if}
+                  </div>
+
+                  <div class="field-row">
+                    <span class="field-label">Search Hugging Face</span>
+                    <div class="model-search-row">
+                      <input
+                        class="input"
+                        type="text"
+                        placeholder="Search compatible GGML Whisper models"
+                        bind:value={whisperSearchQuery}
+                        onkeydown={(event) => {
+                          if (event.key === 'Enter') void searchWhisperModels();
+                        }}
+                      />
+                      <button
+                        class="btn"
+                        type="button"
+                        disabled={whisperSearchLoading || whisperSearchQuery.trim().length < 2}
+                        onclick={searchWhisperModels}
+                      >
+                        {whisperSearchLoading ? 'Searching' : 'Search'}
+                      </button>
+                    </div>
+                    {#if whisperSearchError}
+                      <span class="field-description update-error">{whisperSearchError}</span>
+                    {/if}
+                    {#if whisperSearchResults.length > 0}
+                      <div class="model-list compact">
+                        {#each whisperSearchResults as model}
+                          <div class="model-row">
+                            <div class="model-main">
+                              <div class="model-title-row">
+                                <span class="model-name">{model.name}</span>
+                                <span class="model-status">Hugging Face</span>
+                              </div>
+                              <span class="field-description">{model.fileName}</span>
+                            </div>
+                            <div class="model-actions">
+                              <button
+                                class="btn"
+                                type="button"
+                                aria-label={`Download model ${model.name}`}
+                                disabled={!model.url || isAnyWhisperDownloadActive()}
+                                onclick={() => downloadWhisperModel(model)}
+                              >
+                                {isDownloadingWhisperModel(model) ? 'Downloading' : 'Download'}
+                              </button>
+                            </div>
+                          </div>
+                        {/each}
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="field-row">
+                    <span class="field-label">Manual model path</span>
                     <input
                       class="input"
-                      type={showTxApiKey ? 'text' : 'password'}
-                      placeholder="Required"
-                      bind:value={txApiKey}
-                      autocomplete="off"
+                      type="text"
+                      placeholder={selectedWhisperModel?.path ?? txDefaultModels.localwhisper}
+                      bind:value={txModel}
                     />
-                    <button
-                      class="password-toggle"
-                      onclick={() => { showTxApiKey = !showTxApiKey; }}
-                      aria-label={showTxApiKey ? 'Hide API key' : 'Show API key'}
-                      type="button"
-                    >
-                      {#if showTxApiKey}
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                          <circle cx="8" cy="8" r="2"/>
-                        </svg>
-                      {:else}
-                        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
-                          <path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/>
-                          <circle cx="8" cy="8" r="2"/>
-                          <line x1="2" y1="14" x2="14" y2="2"/>
-                        </svg>
-                      {/if}
-                    </button>
+                    <span class="field-description">
+                      Leave empty to use {txDefaultModels.localwhisper}, choose a downloaded model above, or paste an absolute GGML .bin path.
+                    </span>
                   </div>
-                </div>
-
-                <div class="field-row">
-                  <span class="field-label">Model</span>
-                  <input
-                    class="input"
-                    type="text"
-                    placeholder={txDefaultModels[txProvider] ?? ''}
-                    bind:value={txModel}
-                  />
-                  <span class="field-description">
-                    Override the default model, or leave empty to use {txDefaultModels[txProvider] ?? 'none'}.
-                  </span>
-                </div>
+                {:else}
+                  <div class="field-row">
+                    <span class="field-label">{txModelLabel}</span>
+                    <input
+                      class="input"
+                      type="text"
+                      placeholder={txDefaultModels[txProvider] ?? ''}
+                      bind:value={txModel}
+                    />
+                    <span class="field-description">
+                      {txModelDescription}
+                    </span>
+                  </div>
+                {/if}
 
                 {#if txProvider === 'deepgram'}
                   <div class="field-divider"></div>
@@ -1609,7 +1987,7 @@
                 </div>
                 {#if updateStatus === 'available'}
                   <button class="btn btn-primary" onclick={installUpdate} type="button">
-                    {canInstallPendingUpdateInApp() ? 'Install Update' : 'Open Release'}
+                    Install Update
                   </button>
                 {:else}
                   <button class="btn btn-secondary" onclick={checkForUpdates} type="button" disabled={updateBusy()}>
@@ -1632,11 +2010,7 @@
 
               {#if updateStatus === 'available' && updateVersion}
                 <div class="section-footer">
-                  {#if canInstallPendingUpdateInApp()}
-                    Version {updateVersion} will be verified before it is installed.
-                  {:else}
-                    Install the downloaded app manually to update this unsigned macOS build.
-                  {/if}
+                  Version {updateVersion} will be verified before it is installed.
                 </div>
               {:else if updateStatus === 'error'}
                 <div class="section-footer update-error">
