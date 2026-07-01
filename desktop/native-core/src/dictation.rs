@@ -630,7 +630,7 @@ async fn process_audio_pipeline(wav_path: &PathBuf, cfg: &AppConfig) -> Result<S
         return Err("Choose an API provider in Settings".to_string());
     }
 
-    if cfg.tx_provider != TranscriptionProvider::None && cfg.tx_api_key.is_empty() {
+    if cfg.tx_provider.requires_api_key() && cfg.tx_api_key.is_empty() {
         return Err("Set up an API key in Settings".to_string());
     }
 

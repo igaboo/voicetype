@@ -1,18 +1,12 @@
-import { spawnSync } from "node:child_process";
 import { app, type WebContents } from "electron";
 import electronUpdater from "electron-updater";
 import { allowWindowCloseForQuit } from "./windows";
 
 const { autoUpdater } = electronUpdater;
 const INSTALL_HANDOFF_TIMEOUT_MS = 120_000;
-const GITHUB_RELEASES_URL = "https://github.com/oobagi/yap/releases/latest";
-const GITHUB_LATEST_RELEASE_API_URL = "https://api.github.com/repos/oobagi/yap/releases/latest";
-const RELEASE_CHECK_TIMEOUT_MS = 15_000;
 
 type ElectronUpdate = {
   version: string;
-  canInstallInApp: boolean;
-  releaseUrl?: string;
 };
 
 type DownloadProgress = {
@@ -33,11 +27,6 @@ type UpdateInfoWithFiles = {
   path?: string;
 };
 
-type GitHubReleaseInfo = {
-  tag_name?: string;
-  html_url?: string;
-};
-
 export function configureUpdater(): void {
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = false;
@@ -47,20 +36,15 @@ export function configureUpdater(): void {
 export async function checkForElectronUpdate(): Promise<ElectronUpdate | null> {
   if (!app.isPackaged) return null;
 
-  if (!canUseInAppInstaller()) {
-    return checkLatestGitHubRelease();
-  }
-
   const result = await autoUpdater.checkForUpdates();
   if (!result?.isUpdateAvailable) return null;
 
   const version = result?.updateInfo?.version;
-  return version ? { version, canInstallInApp: true } : null;
+  return version ? { version } : null;
 }
 
 export async function downloadAndInstallElectronUpdate(sender: WebContents): Promise<null> {
   if (!app.isPackaged) return null;
-  assertCanUseInAppInstaller();
 
   const result = await autoUpdater.checkForUpdates();
   if (!result?.isUpdateAvailable) {
@@ -188,104 +172,4 @@ function positiveNumber(value: unknown): number | undefined {
 function normalizeError(error: unknown): Error {
   if (error instanceof Error) return error;
   return new Error(String(error));
-}
-
-function assertCanUseInAppInstaller(): void {
-  if (canUseInAppInstaller()) return;
-
-  throw new Error(
-    "This copy of Yap is unsigned, so it cannot install macOS updates in-app. Download the latest release from GitHub Releases."
-  );
-}
-
-function canUseInAppInstaller(): boolean {
-  if (process.platform !== "darwin") return true;
-
-  return hasDeveloperIdSignature();
-}
-
-function hasDeveloperIdSignature(): boolean {
-  const appBundlePath = macAppBundlePath();
-  if (!appBundlePath) return true;
-
-  let signatureDetails: string;
-  try {
-    const result = spawnSync("codesign", ["-dv", "--verbose=4", appBundlePath], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    signatureDetails = `${result.stdout ?? ""}${result.stderr ?? ""}`;
-    if (result.error) throw result.error;
-    if (result.status !== 0) throw new Error(signatureDetails);
-  } catch (error) {
-    console.warn(
-      `[yap-updater] macOS signature check failed; using manual update mode: ${normalizeError(error).message}`
-    );
-    return false;
-  }
-
-  return /^Authority=Developer ID Application:/m.test(signatureDetails);
-}
-
-async function checkLatestGitHubRelease(): Promise<ElectronUpdate | null> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), RELEASE_CHECK_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(GITHUB_LATEST_RELEASE_API_URL, {
-      headers: {
-        Accept: "application/vnd.github+json",
-        "User-Agent": "Yap updater",
-      },
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`GitHub Releases returned HTTP ${response.status}`);
-    }
-
-    const release = (await response.json()) as GitHubReleaseInfo;
-    const version = normalizeVersion(release.tag_name);
-    if (!version || compareVersions(version, app.getVersion()) <= 0) return null;
-
-    return {
-      version,
-      canInstallInApp: false,
-      releaseUrl: release.html_url ?? GITHUB_RELEASES_URL,
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizeVersion(value: string | undefined): string | null {
-  const version = value?.trim().replace(/^v/i, "");
-  return version && /^\d+\.\d+\.\d+(?:[-+].+)?$/.test(version) ? version : null;
-}
-
-function compareVersions(left: string, right: string): number {
-  const leftParts = parseVersionParts(left);
-  const rightParts = parseVersionParts(right);
-
-  for (let index = 0; index < 3; index += 1) {
-    const delta = leftParts[index] - rightParts[index];
-    if (delta !== 0) return delta;
-  }
-
-  return 0;
-}
-
-function parseVersionParts(version: string): [number, number, number] {
-  const [major = "0", minor = "0", patch = "0"] = version.split(/[+-]/)[0].split(".");
-  return [major, minor, patch].map((part) => Number.parseInt(part, 10) || 0) as [
-    number,
-    number,
-    number,
-  ];
-}
-
-function macAppBundlePath(): string | null {
-  const marker = "/Contents/MacOS/";
-  const executablePath = app.getPath("exe");
-  const markerIndex = executablePath.indexOf(marker);
-  return markerIndex === -1 ? null : executablePath.slice(0, markerIndex);
 }

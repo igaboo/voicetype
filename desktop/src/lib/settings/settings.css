@@ -16,6 +16,9 @@
   --settings-primary-hover: #409cff;
   --settings-primary-soft: rgba(10, 132, 255, 0.14);
   --settings-primary-border: rgba(10, 132, 255, 0.42);
+  --settings-success-text: #137a4b;
+  --settings-success-bg: rgba(19, 122, 75, 0.1);
+  --settings-success-border: rgba(19, 122, 75, 0.32);
   --settings-radius-input: 7px;
   --settings-radius-button: 7px;
   --settings-font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', 'Helvetica Neue', sans-serif;
@@ -31,10 +34,13 @@
     --settings-surface-active: #303030;
     --settings-border: #343434;
     --settings-border-muted: #1f1f1f;
-    --settings-text-muted: #707070;
+    --settings-text-muted: #9a9a9a;
     --settings-text-muted-active: #9a9a9a;
     --settings-badge-bg: #2a2a2a;
     --settings-badge-text: #9a9a9a;
+    --settings-success-text: #64c98e;
+    --settings-success-bg: rgba(100, 201, 142, 0.12);
+    --settings-success-border: rgba(100, 201, 142, 0.36);
   }
 }
 
@@ -95,6 +101,9 @@ label {
   --settings-text-muted-active: #5f5850;
   --settings-badge-bg: #ece6dd;
   --settings-badge-text: #6e665d;
+  --settings-success-text: #137a4b;
+  --settings-success-bg: rgba(19, 122, 75, 0.1);
+  --settings-success-border: rgba(19, 122, 75, 0.32);
 }
 
 .settings-container[data-appearance-mode='dark'] {
@@ -105,10 +114,13 @@ label {
   --settings-surface-active: #303030;
   --settings-border: #343434;
   --settings-border-muted: #1f1f1f;
-  --settings-text-muted: #707070;
+  --settings-text-muted: #9a9a9a;
   --settings-text-muted-active: #9a9a9a;
   --settings-badge-bg: #2a2a2a;
   --settings-badge-text: #9a9a9a;
+  --settings-success-text: #64c98e;
+  --settings-success-bg: rgba(100, 201, 142, 0.12);
+  --settings-success-border: rgba(100, 201, 142, 0.36);
 }
 
 .settings-container.platform-macos {
@@ -725,6 +737,118 @@ label {
   display: none;
 }
 
+.local-models-header,
+.model-search-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.model-search-row .input {
+  flex: 1;
+}
+
+.model-setup-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px;
+  border: 1px solid var(--settings-primary-border);
+  border-radius: 8px;
+  background: var(--settings-primary-soft);
+}
+
+.model-setup-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.model-list.compact {
+  margin-top: 2px;
+}
+
+.model-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid var(--settings-border);
+  border-radius: 8px;
+  background: var(--settings-surface);
+}
+
+.model-row.selected {
+  border-color: var(--settings-primary-border);
+}
+
+.model-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.model-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.model-name {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.model-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border: 1px solid var(--settings-border);
+  border-radius: 999px;
+  background: var(--settings-badge-bg);
+  color: var(--settings-badge-text);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.model-status.installed {
+  border-color: var(--settings-success-border);
+  background: var(--settings-success-bg);
+  color: var(--settings-success-text);
+}
+
+.model-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.model-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 3px;
+}
+
+.model-progress-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--settings-text-muted);
+  font-size: 11px;
+}
+
 .btn {
   display: inline-flex;
   align-items: center;
@@ -947,6 +1071,22 @@ label {
   .history-toolbar {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .local-models-header,
+  .model-search-row,
+  .model-setup-state,
+  .model-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .model-actions {
+    width: 100%;
+  }
+
+  .model-actions .btn {
+    flex: 1;
   }
 
   .hotkey-button {

@@ -12,6 +12,8 @@ use crate::formatting::FormattingStyle;
 pub enum TranscriptionProvider {
     /// On-device SpeechAnalyzer recognition. Currently available on macOS 26+.
     None,
+    #[serde(rename = "localwhisper", alias = "local-whisper")]
+    LocalWhisper,
     Gemini,
     #[serde(rename = "openai")]
     OpenAI,
@@ -23,7 +25,7 @@ pub enum TranscriptionProvider {
 impl Default for TranscriptionProvider {
     fn default() -> Self {
         if cfg!(target_os = "windows") {
-            Self::OpenAI
+            Self::LocalWhisper
         } else {
             Self::None
         }
@@ -35,6 +37,7 @@ impl TranscriptionProvider {
     pub fn default_model(&self) -> &'static str {
         match self {
             Self::None => "",
+            Self::LocalWhisper => "large-v3-turbo-q5_0",
             Self::Gemini => "gemini-2.5-flash",
             Self::OpenAI => "gpt-4o-transcribe",
             Self::Deepgram => "nova-3",
@@ -45,6 +48,14 @@ impl TranscriptionProvider {
     /// Whether this provider can also handle formatting (it's an LLM).
     pub fn can_also_format(&self) -> bool {
         matches!(self, Self::Gemini)
+    }
+
+    /// Whether this provider requires a cloud API key before transcription.
+    pub fn requires_api_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Gemini | Self::OpenAI | Self::Deepgram | Self::ElevenLabs
+        )
     }
 }
 
@@ -82,6 +93,7 @@ pub async fn transcribe(
 ) -> Result<String, String> {
     match provider {
         TranscriptionProvider::None => transcribe_on_device(audio_path).await,
+        TranscriptionProvider::LocalWhisper => transcribe_local_whisper(audio_path, options).await,
         TranscriptionProvider::Gemini => transcribe_gemini(audio_path, options, None).await,
         TranscriptionProvider::OpenAI => transcribe_openai(audio_path, options).await,
         TranscriptionProvider::Deepgram => transcribe_deepgram(audio_path, options).await,
@@ -129,6 +141,21 @@ async fn transcribe_on_device(audio_path: &Path) -> Result<String, String> {
     tokio::task::spawn_blocking(move || crate::speech::transcribe(&path, &locale))
         .await
         .map_err(|e| format!("speech task panicked: {e}"))?
+}
+
+async fn transcribe_local_whisper(
+    audio_path: &Path,
+    options: &TranscriptionOptions,
+) -> Result<String, String> {
+    let audio_path = audio_path.to_path_buf();
+    let model = resolve_model(&options.model, TranscriptionProvider::LocalWhisper);
+    let language = options.oai_language.clone();
+
+    tokio::task::spawn_blocking(move || {
+        crate::local_whisper::transcribe(&audio_path, &model, Some(language.as_str()))
+    })
+    .await
+    .map_err(|e| format!("local Whisper task panicked: {e}"))?
 }
 
 async fn transcribe_gemini(

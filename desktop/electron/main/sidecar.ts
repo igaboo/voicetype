@@ -41,6 +41,7 @@ interface SidecarEventMessage {
 type SidecarMessage = SidecarResponseMessage | SidecarEventMessage;
 
 const REQUEST_TIMEOUT_MS = 60_000;
+const DOWNLOAD_REQUEST_TIMEOUT_MS = 30 * 60_000;
 
 export class SidecarUnavailableError extends Error {
   constructor(message: string) {
@@ -80,7 +81,7 @@ export class YapCoreSidecar {
       const timeout = setTimeout(() => {
         this.pending.delete(id);
         reject(new Error(`yap-core timed out handling command: ${command}`));
-      }, REQUEST_TIMEOUT_MS);
+      }, command === "models.whisper.download" ? DOWNLOAD_REQUEST_TIMEOUT_MS : REQUEST_TIMEOUT_MS);
 
       this.pending.set(id, { resolve, reject, timeout });
       child.stdin.write(`${message}\n`, (error) => {

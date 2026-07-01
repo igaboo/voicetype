@@ -40,6 +40,36 @@ export interface HistoryEntry {
   formattingStyle: string | null;
 }
 
+export interface WhisperModelSummary {
+  id: string;
+  name: string;
+  fileName: string;
+  source: 'curated' | 'huggingface' | 'installed';
+  url?: string;
+  sizeBytes?: number;
+  sizeLabel?: string;
+  speedHint?: string;
+  accuracyHint?: string;
+  installed: boolean;
+  path?: string;
+}
+
+export interface WhisperModelList {
+  cacheDir: string;
+  recommendedId: string;
+  models: WhisperModelSummary[];
+}
+
+export interface WhisperDownloadEvent {
+  id: string;
+  fileName: string;
+  status: 'started' | 'progress' | 'finished' | 'error';
+  transferred?: number;
+  total?: number;
+  percent?: number;
+  error?: string;
+}
+
 interface ProviderOption {
   value: string;
   label: string;
@@ -49,11 +79,16 @@ interface ProviderOption {
 export function transcriptionProviders(isWindows: boolean): ProviderOption[] {
   return [
     { value: 'none', label: isWindows ? 'On-device (macOS 26+)' : 'On-device (macOS 26+)', disabled: isWindows },
+    { value: 'localwhisper', label: 'Local Whisper' },
     { value: 'gemini', label: 'Gemini' },
     { value: 'openai', label: 'OpenAI' },
     { value: 'deepgram', label: 'Deepgram' },
     { value: 'elevenlabs', label: 'ElevenLabs' },
   ];
+}
+
+export function transcriptionProviderRequiresApiKey(provider: string): boolean {
+  return ['gemini', 'openai', 'deepgram', 'elevenlabs'].includes(provider);
 }
 
 export const fmtProviders: ProviderOption[] = [
@@ -66,6 +101,7 @@ export const fmtProviders: ProviderOption[] = [
 
 export const txDefaultModels: Record<string, string> = {
   none: '',
+  localwhisper: 'large-v3-turbo-q5_0',
   gemini: 'gemini-2.5-flash',
   openai: 'gpt-4o-transcribe',
   deepgram: 'nova-3',
@@ -116,6 +152,7 @@ export const modifierOrder = ['cmd', 'ctrl', 'option', 'shift', 'fn'];
 
 export const providerLabels: Record<string, string> = {
   none: 'On-device (macOS 26+)',
+  localwhisper: 'Local Whisper',
   gemini: 'Gemini',
   openai: 'OpenAI',
   deepgram: 'Deepgram',

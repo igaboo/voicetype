@@ -295,9 +295,15 @@ mod media {
 #[cfg(target_os = "macos")]
 mod platform {
     use super::log;
+    use std::collections::HashMap;
     use std::ffi::c_void;
     use std::mem::size_of;
     use std::ptr;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::thread::JoinHandle;
+    use std::time::Duration;
 
     type AudioObjectID = u32;
     type AudioObjectPropertySelector = u32;
@@ -345,48 +351,139 @@ mod platform {
     const K_AUDIO_DEVICE_PROPERTY_SCOPE_OUTPUT: u32 = fourcc(*b"outp");
 
     pub struct Session {
-        device_id: AudioObjectID,
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    struct MutedDevice {
         previous_muted: bool,
         changed: bool,
     }
 
     impl Session {
         pub fn begin() -> Result<Self, String> {
-            let device_id = default_output_device()?;
-            let previous_muted = get_device_mute(device_id)?;
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = Arc::clone(&stop);
+            let (ready_tx, ready_rx) = mpsc::channel::<Result<(), String>>();
 
-            if previous_muted {
-                log::info("Audio ducking: default output device is already muted");
-                return Ok(Self {
-                    device_id,
-                    previous_muted,
-                    changed: false,
-                });
+            let thread = std::thread::Builder::new()
+                .name("yap-audio-ducking-macos".into())
+                .spawn(move || run_mute_worker(thread_stop, ready_tx))
+                .map_err(|e| format!("failed to spawn audio ducking worker: {e}"))?;
+
+            match ready_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(Ok(())) => Ok(Self {
+                    stop,
+                    thread: Some(thread),
+                }),
+                Ok(Err(e)) => {
+                    stop.store(true, Ordering::SeqCst);
+                    let _ = thread.join();
+                    Err(e)
+                }
+                Err(e) => {
+                    stop.store(true, Ordering::SeqCst);
+                    let _ = thread.join();
+                    Err(format!("audio ducking worker did not start: {e}"))
+                }
             }
-
-            set_device_mute(device_id, true)?;
-            log::info(&format!(
-                "Audio ducking: muted default output device {device_id}"
-            ));
-
-            Ok(Self {
-                device_id,
-                previous_muted,
-                changed: true,
-            })
         }
 
-        pub fn end(self) -> Result<(), String> {
-            if !self.changed {
-                return Ok(());
+        pub fn end(mut self) -> Result<(), String> {
+            self.stop.store(true, Ordering::SeqCst);
+            if let Some(thread) = self.thread.take() {
+                let _ = thread.join();
+            }
+            Ok(())
+        }
+    }
+
+    fn run_mute_worker(stop: Arc<AtomicBool>, ready_tx: mpsc::Sender<Result<(), String>>) {
+        let mut muted_devices = HashMap::<AudioObjectID, MutedDevice>::new();
+
+        match keep_default_output_muted(&mut muted_devices) {
+            Ok(()) => {
+                let _ = ready_tx.send(Ok(()));
+            }
+            Err(error) => {
+                let _ = ready_tx.send(Err(error));
+                restore_output_devices(muted_devices);
+                return;
+            }
+        }
+
+        while !stop.load(Ordering::SeqCst) {
+            if let Err(error) = keep_default_output_muted(&mut muted_devices) {
+                log::info(&format!(
+                    "Audio ducking: failed to keep output muted: {error}"
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+
+        restore_output_devices(muted_devices);
+    }
+
+    fn keep_default_output_muted(
+        muted_devices: &mut HashMap<AudioObjectID, MutedDevice>,
+    ) -> Result<(), String> {
+        let device_id = default_output_device()?;
+
+        if muted_devices.contains_key(&device_id) {
+            if !get_device_mute(device_id)? {
+                set_device_mute(device_id, true)?;
+                log::info(&format!(
+                    "Audio ducking: re-muted output device {device_id}"
+                ));
+            }
+            return Ok(());
+        }
+
+        let previous_muted = get_device_mute(device_id)?;
+        if previous_muted {
+            log::info(&format!(
+                "Audio ducking: output device {device_id} is already muted"
+            ));
+            muted_devices.insert(
+                device_id,
+                MutedDevice {
+                    previous_muted,
+                    changed: false,
+                },
+            );
+            return Ok(());
+        }
+
+        set_device_mute(device_id, true)?;
+        log::info(&format!(
+            "Audio ducking: muted default output device {device_id}"
+        ));
+        muted_devices.insert(
+            device_id,
+            MutedDevice {
+                previous_muted,
+                changed: true,
+            },
+        );
+
+        Ok(())
+    }
+
+    fn restore_output_devices(muted_devices: HashMap<AudioObjectID, MutedDevice>) {
+        for (device_id, device) in muted_devices {
+            if !device.changed {
+                continue;
             }
 
-            set_device_mute(self.device_id, self.previous_muted)?;
-            log::info(&format!(
-                "Audio ducking: restored output device {} mute state to {}",
-                self.device_id, self.previous_muted
-            ));
-            Ok(())
+            match set_device_mute(device_id, device.previous_muted) {
+                Ok(()) => log::info(&format!(
+                    "Audio ducking: restored output device {device_id} mute state to {}",
+                    device.previous_muted
+                )),
+                Err(error) => log::info(&format!(
+                    "Audio ducking: failed to restore output device {device_id}: {error}",
+                )),
+            }
         }
     }
 
